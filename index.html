@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chấm Trắc Nghiệm OMR</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="app-header">
+  <div class="logo">⬛</div>
+  <div>
+    <h1>Chấm Trắc Nghiệm OMR</h1>
+    <p>OpenCV.js · Nhận dạng tự động · Không cần internet sau khi tải</p>
+  </div>
+  <div id="cvStatus" class="cv-badge loading">⏳ Đang tải OpenCV...</div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" onclick="goTab('key')">① Đáp án</button>
+  <button class="tab" onclick="goTab('scan')">② Chấm ảnh</button>
+  <button class="tab" onclick="goTab('results')">③ Kết quả</button>
+  <button class="tab" onclick="goTab('stats')">④ Thống kê</button>
+</nav>
+
+<!-- ════════════════════════════════
+     TAB 1 — ĐÁP ÁN CHUẨN
+════════════════════════════════ -->
+<div id="pane-key" class="pane on">
+  <div class="card">
+    <p class="card-title">Thông tin bài kiểm tra</p>
+    <div class="row2">
+      <div class="field">
+        <label>Tên bài kiểm tra</label>
+        <input id="exam-name" type="text" placeholder="VD: Kiểm tra HK1 Toán 9">
+      </div>
+      <div class="field">
+        <label>Số câu hỏi</label>
+        <select id="exam-n" onchange="rebuildKeyGrid()">
+          <option value="10">10 câu</option>
+          <option value="15">15 câu</option>
+          <option value="20" selected>20 câu</option>
+          <option value="24">24 câu</option>
+          <option value="25">25 câu</option>
+          <option value="30">30 câu</option>
+          <option value="40">40 câu</option>
+        </select>
+      </div>
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label>Thang điểm</label>
+        <select id="exam-scale">
+          <option value="10">Thang 10</option>
+          <option value="100">Thang 100</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Mã đề</label>
+        <input id="exam-code" type="text" value="001" maxlength="6"
+               style="font-size:18px;font-weight:bold;text-align:center;letter-spacing:3px">
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <p class="card-title">Nhập đáp án chuẩn — click ô để chọn</p>
+    <div class="key-grid" id="keyGrid"></div>
+    <div class="btn-row mt1">
+      <button class="btn" onclick="fillRandom()">🎲 Ngẫu nhiên</button>
+      <button class="btn" onclick="clearKey()">🗑 Xóa</button>
+      <button class="btn accent" onclick="saveKey()">💾 Lưu đề</button>
+    </div>
+    <div id="keyMsg"></div>
+  </div>
+
+  <!-- Danh sách đề đã lưu -->
+  <div class="card">
+    <p class="card-title">Đề đã lưu <span id="keyCount" class="badge">0</span></p>
+    <div id="savedKeys"></div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════
+     TAB 2 — CHẤM ẢNH
+════════════════════════════════ -->
+<div id="pane-scan" class="pane">
+
+  <!-- Chọn đề -->
+  <div class="card">
+    <p class="card-title">Chọn đề thi để chấm</p>
+    <div class="field">
+      <label>Mã đề / Tên bài kiểm tra</label>
+      <select id="scan-keySelect" onchange="onKeySelected()">
+        <option value="">— Chưa chọn —</option>
+      </select>
+    </div>
+    <div id="selectedKeyInfo"></div>
+  </div>
+
+  <!-- Upload ảnh -->
+  <div class="card">
+    <p class="card-title">Tải ảnh phiếu thi lên</p>
+
+    <!-- Drop zone -->
+    <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
+      <div class="dz-icon">📷</div>
+      <p class="dz-main">Kéo thả ảnh vào đây hoặc click để chọn</p>
+      <p class="dz-sub">Hỗ trợ JPG, PNG · Có thể chọn nhiều ảnh cùng lúc</p>
+      <input type="file" id="fileInput" accept="image/*" multiple style="display:none"
+             onchange="handleFiles(this.files)">
+    </div>
+
+    <!-- Camera -->
+    <div class="btn-row mt1">
+      <button class="btn" id="camBtn" onclick="toggleCamera()">📸 Mở camera</button>
+      <button class="btn accent" id="captureBtn" onclick="captureFrame()" disabled>⚡ Chụp &amp; chấm</button>
+    </div>
+    <div class="cam-wrap" id="camWrap" style="display:none">
+      <video id="camVideo" autoplay playsinline muted></video>
+      <canvas id="camCanvas" style="display:none"></canvas>
+    </div>
+  </div>
+
+  <!-- Xử lý pipeline -->
+  <div class="card" id="pipelineCard" style="display:none">
+    <p class="card-title">Đang xử lý <span id="pipelineFile" class="text-muted"></span></p>
+    <div class="pipeline-steps" id="pipelineSteps"></div>
+    <div class="preview-row" id="previewRow"></div>
+  </div>
+
+  <!-- Kết quả chấm của ảnh hiện tại -->
+  <div id="scanResult"></div>
+</div>
+
+<!-- ════════════════════════════════
+     TAB 3 — KẾT QUẢ
+════════════════════════════════ -->
+<div id="pane-results" class="pane">
+  <div class="card">
+    <p class="card-title">
+      Danh sách kết quả
+      <span id="resultCount" class="badge">0</span>
+    </p>
+    <div class="filter-row">
+      <input id="filterName" type="text" placeholder="🔍 Tìm tên / SBD..." oninput="renderResults()">
+      <select id="filterExam" onchange="renderResults()">
+        <option value="">Tất cả đề</option>
+      </select>
+    </div>
+    <div id="resultTable"></div>
+  </div>
+  <div class="btn-row">
+    <button class="btn" onclick="exportExcel()">📊 Xuất Excel</button>
+    <button class="btn" onclick="exportCSV()">📄 Xuất CSV</button>
+    <button class="btn danger" onclick="if(confirm('Xóa tất cả kết quả?')){results=[];saveLocal();renderResults();}">🗑 Xóa tất cả</button>
+  </div>
+</div>
+
+<!-- ════════════════════════════════
+     TAB 4 — THỐNG KÊ
+════════════════════════════════ -->
+<div id="pane-stats" class="pane">
+  <div class="card">
+    <p class="card-title">Chọn bài để thống kê</p>
+    <div class="field">
+      <select id="statsExamSelect" onchange="renderStats()">
+        <option value="">— Tất cả —</option>
+      </select>
+    </div>
+  </div>
+  <div id="statsContent"></div>
+</div>
+
+<!-- Hidden canvas for OpenCV processing -->
+<canvas id="procCanvas" style="display:none"></canvas>
+
+<script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady()"></script>
+<script src="app.js"></script>
+</body>
+</html>
