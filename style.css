@@ -378,3 +378,10 @@ input[type=text]:focus, select:focus {
   .filter-row, #pipelineCard { display: none !important; }
   .pane { display: block !important; padding: 0; }
 }
+/* Hiệu ứng cho nút In Phiếu OMR */
+.btn.btn-print:hover {
+  background-color: #123675 !important; /* Màu xanh đậm hơn khi di chuột */
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+  transition: all 0.2s ease-in-out;
+}
