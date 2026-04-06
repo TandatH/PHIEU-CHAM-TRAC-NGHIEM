@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>In Phiếu Trắc Nghiệm Chuyên Nghiệp</title>
+<style>
+  :root {
+    --accent: #c8421a;
+    --text: #111;
+  }
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: #e2e8f0;
+    margin: 0; padding: 20px;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  
+  /* Thanh điều khiển */
+  .controls {
+    background: white; padding: 15px 30px; border-radius: 10px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px;
+    display: flex; gap: 15px; align-items: center;
+  }
+  select, button { font-size: 15px; padding: 8px 16px; border-radius: 6px; }
+  button { background: var(--accent); color: white; border: none; cursor: pointer; font-weight: bold;}
+  button:hover { background: #b03a16; }
+
+  /* Khu vực trang in A4 */
+  .a4-page {
+    width: 210mm;
+    height: 297mm;
+    background: white;
+    box-shadow: 0 10px 20px rgba(0,0,0,0.15);
+    position: relative;
+    box-sizing: border-box;
+    padding: 15mm; /* Lề giấy */
+  }
+
+  /* Khung định vị cho OpenCV (tỷ lệ chuẩn 800x1100 theo app.js) */
+  .omr-frame {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border: 1px solid transparent; 
+  }
+
+  /* 4 Điểm neo (Anchor) Đen góc */
+  .anchor {
+    position: absolute;
+    width: 24px; height: 24px;
+    background: black;
+  }
+  .tl { top: 0; left: 0; }
+  .tr { top: 0; right: 0; }
+  .bl { bottom: 0; left: 0; }
+  .br { bottom: 0; right: 0; }
+
+  /* Header Thông tin Học sinh (Tự do, nằm ở nửa trên) */
+  .header-info {
+    position: absolute;
+    top: 2%; left: 5%; width: 90%;
+    display: flex; justify-content: space-between;
+  }
+  .school-info h2 { margin: 0 0 5px 0; font-size: 18px; color: #333;}
+  .school-info p { margin: 0; font-size: 14px; color: #555;}
+  .student-info { margin-top: 15px; font-size: 16px; line-height: 2; }
+  .line { border-bottom: 1px dotted #333; display: inline-block; }
+
+  /* Vùng bong bóng (Bubbles) dùng Grid */
+  .region {
+    position: absolute;
+    box-sizing: border-box;
+  }
+  .bubble-grid {
+    display: grid;
+    width: 100%; height: 100%;
+    align-items: center; justify-items: center;
+  }
+  
+  /* Tiêu đề cho các bảng SBD, Mã đề */
+  .region-title {
+    position: absolute; top: -25px; left: 0; width: 100%;
+    text-align: center; font-weight: bold; font-size: 14px;
+    color: var(--accent); text-transform: uppercase;
+  }
+
+  /* Định dạng bong bóng chuẩn */
+  .bubble {
+    width: 18px; height: 18px;
+    border: 1.5px solid #000;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: bold; color: #000;
+    background: white;
+  }
+
+  /* Số thứ tự câu hỏi */
+  .q-num {
+    font-size: 14px; font-weight: bold; color: #333;
+    display: flex; justify-content: flex-end; padding-right: 10px; width: 100%;
+  }
+
+  @media print {
+    body { background: transparent; padding: 0; margin: 0; }
+    .controls { display: none; }
+    .a4-page { box-shadow: none; margin: 0; }
+  }
+</style>
+</head>
+<body>
+
+  <div class="controls">
+    <label><b>Số câu hỏi:</b></label>
+    <select id="numQ" onchange="renderSheet()">
+      <option value="15">15 Câu</option>
+      <option value="20" selected>20 Câu</option>
+      <option value="30">30 Câu</option>
+      <option value="40">40 Câu</option>
+    </select>
+    <button onclick="window.print()">🖨 In Phiếu OMR</button>
+  </div>
+
+  <div class="a4-page">
+    <div class="omr-frame">
+      <div class="anchor tl"></div>
+      <div class="anchor tr"></div>
+      <div class="anchor bl"></div>
+      <div class="anchor br"></div>
+
+      <div class="header-info">
+        <div class="school-info">
+          <h2>PHIẾU TRẢ LỜI TRẮC NGHIỆM</h2>
+          <p>Kỳ thi / Bài kiểm tra: <span class="line" style="width: 200px;"></span></p>
+          <div class="student-info">
+            Họ và tên: <span class="line" style="width: 250px;"></span><br>
+            Lớp: <span class="line" style="width: 100px;"></span> 
+            Ngày: <span class="line" style="width: 100px;"></span>
+          </div>
+        </div>
+      </div>
+
+      <div id="regSBD" class="region" style="left: 12%; top: 22%; width: 30%; height: 28%;">
+        <div class="region-title">Số Báo Danh</div>
+        <div id="gridSBD" class="bubble-grid"></div>
+      </div>
+
+      <div id="regCODE" class="region" style="left: 55%; top: 22%; width: 15%; height: 28%;">
+        <div class="region-title">Mã Đề</div>
+        <div id="gridCODE" class="bubble-grid"></div>
+      </div>
+
+      <div id="regLeft" class="region" style="left: 4%; top: 54%; width: 44%; height: 44%;"></div>
+
+      <div id="regRight" class="region" style="left: 52%; top: 54%; width: 44%; height: 44%;"></div>
+    </div>
+  </div>
+
+<script>
+  function renderSheet() {
+    const numQ = parseInt(document.getElementById('numQ').value);
+    const half = Math.ceil(numQ / 2);
+
+    // Render SBD (6 cột x 10 hàng)
+    const sbd = document.getElementById('gridSBD');
+    sbd.style.gridTemplateColumns = 'repeat(6, 1fr)';
+    sbd.style.gridTemplateRows = 'repeat(10, 1fr)';
+    sbd.innerHTML = '';
+    for (let r = 0; r < 10; r++) {
+      for (let c = 0; c < 6; c++) sbd.innerHTML += `<div class="bubble">${r}</div>`;
+    }
+
+    // Render Mã Đề (3 cột x 10 hàng)
+    const code = document.getElementById('gridCODE');
+    code.style.gridTemplateColumns = 'repeat(3, 1fr)';
+    code.style.gridTemplateRows = 'repeat(10, 1fr)';
+    code.innerHTML = '';
+    for (let r = 0; r < 10; r++) {
+      for (let c = 0; c < 3; c++) code.innerHTML += `<div class="bubble">${r}</div>`;
+    }
+
+    // Render Trắc nghiệm
+    renderPanel('regLeft', 1, half);
+    renderPanel('regRight', half + 1, numQ);
+  }
+
+  function renderPanel(elementId, startQ, endQ) {
+    const n = endQ - startQ + 1;
+    const panel = document.getElementById(elementId);
+    if (n <= 0) { panel.innerHTML = ''; return; }
+    
+    // Grid: 1 cột cho số thứ tự (28%), 4 cột cho A, B, C, D (18% mỗi ô)
+    panel.innerHTML = `<div class="bubble-grid" style="grid-template-columns: 28% repeat(4, 18%); grid-template-rows: repeat(${n}, 1fr);">
+      ${Array.from({length: n}).map((_, i) => {
+        const q = startQ + i;
+        return `<div class="q-num">Câu ${q}:</div>
+                <div class="bubble">A</div>
+                <div class="bubble">B</div>
+                <div class="bubble">C</div>
+                <div class="bubble">D</div>`;
+      }).join('')}
+    </div>`;
+  }
+
+  // Khởi tạo lần đầu
+  renderSheet();
+</script>
+</body>
+</html>
