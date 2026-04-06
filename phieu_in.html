@@ -3,14 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>In Phiếu Trắc Nghiệm Chuyên Nghiệp</title>
+<title>In Phiếu Trắc Nghiệm OMR</title>
 <style>
   :root { --accent: #c8421a; }
-
   body {
     font-family: 'Segoe UI', Arial, sans-serif;
-    background: #e2e8f0;
-    margin: 0; padding: 20px;
+    background: #e2e8f0; margin: 0; padding: 20px;
     display: flex; flex-direction: column; align-items: center;
   }
   .controls {
@@ -22,7 +20,7 @@
   button { background: var(--accent); color: white; border: none; cursor: pointer; font-weight: bold; }
   button:hover { background: #b03a16; }
 
-  /* ══ Trang A4 ══════════════════════════════════════════════ */
+  /* ══ A4 ═══════════════════════════════════════════════════ */
   .a4-page {
     width: 210mm;
     min-height: 297mm;
@@ -32,12 +30,7 @@
     box-sizing: border-box;
   }
 
-  /* ══ ANCHOR ════════════════════════════════════════════════
-     Đặt thẳng trên .a4-page (không qua lớp padding).
-     Dùng border solid thay background — LUÔN in được.
-     Kích thước: 0×0, border 16px mỗi bên → thực tế 32×32px đen.
-     Padding trắng 8px từ mép giấy.
-  ══════════════════════════════════════════════════════════ */
+  /* ══ ANCHOR (4 góc) — dùng border để luôn in được ═════════ */
   .anc {
     position: absolute;
     width: 0; height: 0;
@@ -45,28 +38,47 @@
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
-  .anc.tl { top:  8px; left:  8px; }
-  .anc.tr { top:  8px; right: 8px; }
-  .anc.bl { bottom: 8px; left:  8px; }
+  .anc.tl { top: 8px; left: 8px; }
+  .anc.tr { top: 8px; right: 8px; }
+  .anc.bl { bottom: 8px; left: 8px; }
   .anc.br { bottom: 8px; right: 8px; }
 
-  /* ══ Nội dung bên trong ════════════════════════════════════ */
+  /* ══ TIMING MARKS ══════════════════════════════════════════
+     Dải vạch đen cạnh trái/phải, mỗi vạch = 1 hàng SBD hoặc 1 câu hỏi.
+     OpenCV đọc Y của từng vạch → biết chính xác vị trí hàng cần đọc.
+  ══════════════════════════════════════════════════════════ */
+  .tm-col {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    /* gap được set qua JS để khớp với spacing bubble */
+  }
+  /* Mỗi vạch timing */
+  .tm {
+    background: black;
+    width: 10px;
+    /* height và margin-bottom được set qua JS */
+    flex-shrink: 0;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* ══ Nội dung ══════════════════════════════════════════════ */
   .content {
-    padding: 14mm 16mm 12mm 16mm;
+    padding: 12mm 16mm 12mm 20mm; /* trái rộng hơn để nhường chỗ timing marks */
     box-sizing: border-box;
   }
 
-  /* Header */
-  .school-info h2 { margin: 0 0 5px; font-size: 17px; color: #222; }
+  .school-info h2 { margin: 0 0 5px; font-size: 16px; color: #222; }
   .school-info p  { margin: 0; font-size: 13px; color: #555; }
-  .student-info   { margin-top: 10px; font-size: 14px; line-height: 2.1; }
+  .student-info   { margin-top: 10px; font-size: 13px; line-height: 2.1; }
   .uline { border-bottom: 1px dotted #444; display: inline-block; }
 
-  /* ══ OMR Frame (chuẩn tỷ lệ 800×1100 theo app.js) ══════════ */
+  /* ══ OMR Frame ══════════════════════════════════════════════ */
   .omr-frame {
     position: relative;
     width: 100%;
-    height: 248mm; /* 182mm × 1100/800 ≈ 250mm */
+    height: 248mm;
     margin-top: 8mm;
   }
   .region {
@@ -79,8 +91,8 @@
     align-items: center; justify-items: center;
   }
   .region-title {
-    position: absolute; top: -22px; left: 0; width: 100%;
-    text-align: center; font-weight: bold; font-size: 12px;
+    position: absolute; top: -20px; left: 0; width: 100%;
+    text-align: center; font-weight: bold; font-size: 11px;
     color: var(--accent); text-transform: uppercase; letter-spacing: .5px;
   }
   .bubble {
@@ -94,9 +106,9 @@
     print-color-adjust: exact;
   }
   .q-num {
-    font-size: 13px; font-weight: bold; color: #333;
+    font-size: 12px; font-weight: bold; color: #333;
     display: flex; justify-content: flex-end;
-    padding-right: 8px; align-items: center;
+    padding-right: 6px; align-items: center;
   }
 
   /* ══ Print ═════════════════════════════════════════════════ */
@@ -108,6 +120,12 @@
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
       color-adjust: exact !important;
+    }
+    .anc {
+      border: 16px solid black !important;
+    }
+    .tm {
+      background: black !important;
     }
   }
 </style>
@@ -125,26 +143,35 @@
   <button onclick="window.print()">🖨 In Phiếu OMR</button>
 </div>
 
-<div class="a4-page">
-  <!-- Anchor trực tiếp trên a4-page, không qua lớp padding -->
+<div class="a4-page" id="a4">
+  <!-- 4 Anchor góc -->
   <div class="anc tl"></div>
   <div class="anc tr"></div>
   <div class="anc bl"></div>
   <div class="anc br"></div>
 
+  <!-- Timing marks SBD (cạnh trái, 10 vạch cho 10 hàng 0-9) -->
+  <div class="tm-col" id="tmSBD" style="left: 40px;"></div>
+
+  <!-- Timing marks câu hỏi trái (cạnh trái) -->
+  <div class="tm-col" id="tmAnsL" style="left: 40px;"></div>
+
+  <!-- Timing marks câu hỏi phải (cạnh phải) -->
+  <div class="tm-col" id="tmAnsR" style="right: 40px;"></div>
+
   <div class="content">
     <div class="school-info">
       <h2>PHIẾU TRẢ LỜI TRẮC NGHIỆM</h2>
-      <p>Kỳ thi / Bài kiểm tra: <span class="uline" style="width:200px"></span></p>
+      <p>Kỳ thi / Bài kiểm tra: <span class="uline" style="width:190px"></span></p>
       <div class="student-info">
-        Họ và tên: <span class="uline" style="width:240px"></span><br>
-        Lớp: <span class="uline" style="width:90px"></span> &nbsp;
-        Ngày: <span class="uline" style="width:90px"></span>
+        Họ và tên: <span class="uline" style="width:230px"></span><br>
+        Lớp: <span class="uline" style="width:85px"></span> &nbsp;
+        Ngày: <span class="uline" style="width:85px"></span>
       </div>
     </div>
 
-    <!-- OMR Frame — % tọa độ khớp chính xác với REGION trong app.js -->
-    <div class="omr-frame">
+    <!-- OMR Frame — % tọa độ khớp chính xác REGION trong app.js -->
+    <div class="omr-frame" id="omrFrame">
       <div id="regSBD"   class="region" style="left:12%;top:22%;width:30%;height:28%;">
         <div class="region-title">Số Báo Danh</div>
         <div id="gridSBD" class="bubble-grid"></div>
@@ -160,6 +187,7 @@
 </div>
 
 <script>
+// ── Render bong bóng ────────────────────────────────────────
 function renderSheet() {
   const numQ = parseInt(document.getElementById('numQ').value);
   const half = Math.ceil(numQ / 2);
@@ -182,6 +210,9 @@ function renderSheet() {
 
   renderPanel('regLeft',  1,        half);
   renderPanel('regRight', half + 1, numQ);
+
+  // Sau khi DOM render xong, đặt timing marks theo vị trí thực tế
+  requestAnimationFrame(() => requestAnimationFrame(placeTimingMarks));
 }
 
 function renderPanel(id, startQ, endQ) {
@@ -199,6 +230,79 @@ function renderPanel(id, startQ, endQ) {
               <div class="bubble">D</div>`;
     }).join('')}
   </div>`;
+}
+
+// ── Đặt timing marks theo vị trí DOM thực tế ────────────────
+// Mỗi vạch canh đúng giữa hàng bong bóng tương ứng,
+// giúp OpenCV biết chính xác Y của từng hàng dù ảnh bị nghiêng nhẹ.
+function placeTimingMarks() {
+  const a4 = document.getElementById('a4');
+  const a4Top = a4.getBoundingClientRect().top;
+
+  // ── Timing marks SBD (10 hàng số 0-9) ──────────────────
+  const sbdBubbles = document.querySelectorAll('#gridSBD .bubble');
+  if (sbdBubbles.length === 60) { // 6 cột × 10 hàng
+    const tmSBD = document.getElementById('tmSBD');
+    tmSBD.innerHTML = '';
+
+    // Lấy Y của hàng đầu và hàng cuối để tính top/height
+    const firstRow = sbdBubbles[0].getBoundingClientRect();
+    const tmTop = firstRow.top - a4Top + firstRow.height / 2 - 4;
+    tmSBD.style.top = tmTop + 'px';
+
+    // Tính spacing giữa các hàng
+    const rowSpacing = [];
+    for (let r = 0; r < 9; r++) {
+      const y0 = sbdBubbles[r * 6].getBoundingClientRect().top;
+      const y1 = sbdBubbles[(r+1) * 6].getBoundingClientRect().top;
+      rowSpacing.push(y1 - y0);
+    }
+    const avgSpacing = rowSpacing.reduce((s,v)=>s+v,0) / rowSpacing.length;
+
+    for (let r = 0; r < 10; r++) {
+      const tm = document.createElement('div');
+      tm.className = 'tm';
+      tm.style.height = '6px';
+      if (r < 9) tm.style.marginBottom = (avgSpacing - 6) + 'px';
+      tmSBD.appendChild(tm);
+    }
+  }
+
+  // ── Timing marks câu hỏi trái ───────────────────────────
+  placeAnsTM('regLeft', 'tmAnsL', 'left');
+  placeAnsTM('regRight', 'tmAnsR', 'right');
+}
+
+function placeAnsTM(panelId, tmId, side) {
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  const rows = panel.querySelectorAll('.q-num');
+  if (!rows.length) return;
+
+  const a4 = document.getElementById('a4');
+  const a4Rect = a4.getBoundingClientRect();
+  const tmEl = document.getElementById(tmId);
+  tmEl.innerHTML = '';
+
+  const firstRect = rows[0].getBoundingClientRect();
+  const tmTop = firstRect.top - a4Rect.top + firstRect.height / 2 - 4;
+  tmEl.style.top = tmTop + 'px';
+
+  const spacings = [];
+  for (let i = 0; i < rows.length - 1; i++) {
+    spacings.push(rows[i+1].getBoundingClientRect().top - rows[i].getBoundingClientRect().top);
+  }
+  const avg = spacings.length
+    ? spacings.reduce((s,v)=>s+v,0) / spacings.length
+    : firstRect.height;
+
+  for (let i = 0; i < rows.length; i++) {
+    const tm = document.createElement('div');
+    tm.className = 'tm';
+    tm.style.height = '7px';
+    if (i < rows.length - 1) tm.style.marginBottom = (avg - 7) + 'px';
+    tmEl.appendChild(tm);
+  }
 }
 
 renderSheet();
