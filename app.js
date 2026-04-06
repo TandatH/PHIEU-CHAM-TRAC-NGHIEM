@@ -372,55 +372,99 @@ const REGION = {
 };
 
 // ════════════════════════════════════════════════════════════════
-//  TÌM 4 ĐIỂM NEO (ô vuông đen ở 4 góc)
+//  TÌM 4 ĐIỂM NEO (ô vuông đen ở 4 góc) — robust version
 // ════════════════════════════════════════════════════════════════
 function findAnchorSquares(binMat, colorMat) {
-  const contours = new cv.MatVector();
-  const hierarchy = new cv.Mat();
-  cv.findContours(binMat.clone(), contours, hierarchy,
-    cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  const IW = binMat.cols, IH = binMat.rows;
 
-  const W = binMat.cols, H = binMat.rows;
-  const candidates = [];
+  // Thử tìm anchor trên ảnh gốc, nếu không được thì dilate để nối nét đứt
+  for (let pass = 0; pass < 2; pass++) {
+    let workMat = binMat;
+    let dilated = null;
+    if (pass === 1) {
+      dilated = new cv.Mat();
+      const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3,3));
+      cv.dilate(binMat, dilated, kernel);
+      kernel.delete();
+      workMat = dilated;
+    }
 
-  for (let i = 0; i < contours.size(); i++) {
-    const cnt  = contours.get(i);
-    const area = cv.contourArea(cnt);
-    const peri = cv.arcLength(cnt, true);
-    const approx = new cv.Mat();
-    cv.approxPolyDP(cnt, approx, 0.04 * peri, true);
+    const contours  = new cv.MatVector();
+    const hierarchy = new cv.Mat();
+    cv.findContours(workMat.clone(), contours, hierarchy,
+      cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-    // Điểm neo phải là hình vuông (~4 cạnh), diện tích hợp lý
-    if (approx.rows === 4) {
-      const minA = W * H * 0.0004;
-      const maxA = W * H * 0.015;
-      if (area > minA && area < maxA) {
-        const rect = cv.boundingRect(cnt);
+    const candidates = [];
+    const minA = IW * IH * 0.0002; // nới rộng ngưỡng min (anchor nhỏ hơn)
+    const maxA = IW * IH * 0.025;  // nới rộng ngưỡng max
+
+    for (let i = 0; i < contours.size(); i++) {
+      const cnt  = contours.get(i);
+      const area = cv.contourArea(cnt);
+      if (area < minA || area > maxA) { cnt.delete(); continue; }
+
+      const peri   = cv.arcLength(cnt, true);
+      const approx = new cv.Mat();
+      // Chấp nhận 3–8 cạnh (anchor chụp thực tế thường không hoàn hảo)
+      cv.approxPolyDP(cnt, approx, 0.035 * peri, true);
+      const sides = approx.rows;
+
+      if (sides >= 3 && sides <= 8) {
+        const rect  = cv.boundingRect(cnt);
         const ratio = rect.width / rect.height;
-        if (ratio > 0.6 && ratio < 1.6) {
+        // Phải gần vuông (0.5 ~ 2.0) và nằm gần góc ảnh (25% từ mỗi góc)
+        const nearEdge = rect.x < IW * 0.35 || rect.x + rect.width > IW * 0.65 ||
+                         rect.y < IH * 0.35 || rect.y + rect.height > IH * 0.65;
+        if (ratio > 0.5 && ratio < 2.0 && nearEdge) {
           candidates.push({
-            cx: rect.x + rect.width / 2,
+            cx: rect.x + rect.width  / 2,
             cy: rect.y + rect.height / 2,
-            area, rect
+            area, rect, sides
           });
         }
       }
+      approx.delete(); cnt.delete();
     }
-    approx.delete(); cnt.delete();
+    contours.delete(); hierarchy.delete();
+    if (dilated) dilated.delete();
+
+    if (candidates.length < 4) continue;
+
+    // Chọn candidate gần nhất với mỗi góc lý thuyết
+    const corners = [
+      { name:'tl', ex:0,   ey:0   },
+      { name:'tr', ex:IW,  ey:0   },
+      { name:'br', ex:IW,  ey:IH  },
+      { name:'bl', ex:0,   ey:IH  }
+    ];
+    const chosen = {};
+    const used   = new Set();
+    let valid    = true;
+
+    for (const corner of corners) {
+      let best = null, bestDist = Infinity;
+      for (let j = 0; j < candidates.length; j++) {
+        if (used.has(j)) continue;
+        const d = Math.hypot(candidates[j].cx - corner.ex, candidates[j].cy - corner.ey);
+        if (d < bestDist) { bestDist = d; best = j; }
+      }
+      if (best === null || bestDist > Math.min(IW, IH) * 0.4) { valid = false; break; }
+      chosen[corner.name] = candidates[best];
+      used.add(best);
+    }
+
+    if (!valid) continue;
+
+    // Validate: 4 anchor phải trải rộng ít nhất 50% kích thước ảnh
+    const xSpan = Math.max(chosen.tl.cx, chosen.tr.cx, chosen.br.cx, chosen.bl.cx)
+                - Math.min(chosen.tl.cx, chosen.tr.cx, chosen.br.cx, chosen.bl.cx);
+    const ySpan = Math.max(chosen.tl.cy, chosen.tr.cy, chosen.br.cy, chosen.bl.cy)
+                - Math.min(chosen.tl.cy, chosen.tr.cy, chosen.br.cy, chosen.bl.cy);
+    if (xSpan < IW * 0.4 || ySpan < IH * 0.4) continue;
+
+    return chosen; // { tl, tr, br, bl }
   }
-  contours.delete(); hierarchy.delete();
-
-  if (candidates.length < 4) return null;
-
-  // Chọn 4 ô ở 4 góc
-  const tl = candidates.sort((a,b) => (a.cx+a.cy)-(b.cx+b.cy))[0];
-  const br = candidates.sort((a,b) => (b.cx+b.cy)-(a.cx+a.cy))[0];
-  const tr = candidates.sort((a,b) => (b.cx-b.cy)-(a.cx-a.cy))[0];
-  const bl = candidates.sort((a,b) => (a.cx-a.cy)-(b.cx-b.cy))[0];
-
-  // Validate: phải phủ đủ 4 góc
-  if (!tl || !br || !tr || !bl) return null;
-  return { tl, tr, br, bl };
+  return null; // Không tìm được
 }
 
 function perspectiveWarp(mat, anchors, dstW, dstH) {
@@ -470,7 +514,7 @@ function readBubbleNumber(binMat, region, numCols) {
         Math.round(cellW * 0.8), Math.round(cellH * 0.8));
       if (dark > maxDark) { maxDark = dark; picked = r; }
     }
-    if (maxDark > 0.10) result += String(picked);
+    if (maxDark > 0.07) result += String(picked);
     else result += '?';
   }
   return result;
@@ -512,9 +556,9 @@ function readAnswerBubbles(binMat, numQ) {
         darks.push(sampleDark(binMat, cx0, cy0, cwd, cHgt));
       }
 
-      // Phát hiện: tô đậm > 0.12 ngưỡng và > 2× trung bình
+      // Phát hiện: tô đậm > 0.08 ngưỡng và > 1.8× trung bình (nhạy hơn với ảnh mờ)
       const avg = darks.reduce((s,v) => s+v, 0) / 4;
-      const filled = darks.map((d,i) => ({ i, d, ok: d > 0.12 && d > avg * 1.6 }));
+      const filled = darks.map((d,i) => ({ i, d, ok: d > 0.08 && d > avg * 1.5 }));
       const chosen = filled.filter(f => f.ok);
 
       if (chosen.length === 0) {
@@ -528,7 +572,7 @@ function readAnswerBubbles(binMat, numQ) {
       } else {
         answers[q] = OPTS[chosen[0].i];
         // Kiểm tra tô quá mờ
-        if (chosen[0].d < 0.18) {
+        if (chosen[0].d < 0.12) {
           flags.push({ type:'warn', msg:`Câu ${q}: tô mờ (${(chosen[0].d*100).toFixed(0)}% độ đen)` });
         }
       }
