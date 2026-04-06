@@ -45,16 +45,21 @@
     border: 1px solid transparent; 
   }
 
-  /* 4 Điểm neo (Anchor) Đen góc */
-  .anchor {
+  /* 4 Điểm neo (Anchor) Đen góc — padding trắng để contour không dính lề */
+  .anchor-wrap {
     position: absolute;
-    width: 24px; height: 24px;
+    width: 44px; height: 44px;
+    background: white;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .anchor-wrap.tl { top: 0; left: 0; }
+  .anchor-wrap.tr { top: 0; right: 0; }
+  .anchor-wrap.bl { bottom: 0; left: 0; }
+  .anchor-wrap.br { bottom: 0; right: 0; }
+  .anchor {
+    width: 30px; height: 30px;
     background: black;
   }
-  .tl { top: 0; left: 0; }
-  .tr { top: 0; right: 0; }
-  .bl { bottom: 0; left: 0; }
-  .br { bottom: 0; right: 0; }
 
   /* Header Thông tin Học sinh (Tự do, nằm ở nửa trên) */
   .header-info {
@@ -123,10 +128,10 @@
 
   <div class="a4-page">
     <div class="omr-frame">
-      <div class="anchor tl"></div>
-      <div class="anchor tr"></div>
-      <div class="anchor bl"></div>
-      <div class="anchor br"></div>
+      <div class="anchor-wrap tl"><div class="anchor"></div></div>
+      <div class="anchor-wrap tr"><div class="anchor"></div></div>
+      <div class="anchor-wrap bl"><div class="anchor"></div></div>
+      <div class="anchor-wrap br"><div class="anchor"></div></div>
 
       <div class="header-info">
         <div class="school-info">
