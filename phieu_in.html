@@ -5,315 +5,510 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>In Phiếu Trắc Nghiệm OMR</title>
 <style>
-  :root { --accent: #c8421a; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  --page-w: 210mm;
+  --page-h: 297mm;
+  --ink: #000;
+  --paper: #fff;
+  --muted: #555;
+  --line: #b8b8b8;
+  --bubble: 4.1mm;
+  --bubble-border: 0.38mm;
+  --anchor: 8mm;
+  --marker: 6px;
+  --marker-gap: 12px;
+  --font: "Segoe UI", "DejaVu Sans", Arial, sans-serif;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  font-family: var(--font);
+  color: var(--ink);
+  background: #e8edf3;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 18px;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  font-size: 14px;
+}
+
+.controls select,
+.controls button {
+  font: inherit;
+  padding: 7px 12px;
+  border: 1px solid #c8c8c8;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.controls button {
+  border-color: #1e3a5f;
+  background: #1e3a5f;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.a4-page {
+  position: relative;
+  width: var(--page-w);
+  height: var(--page-h);
+  overflow: hidden;
+  background: var(--paper);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.22);
+}
+
+.anchor,
+.region-marker {
+  background: var(--ink);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.anchor {
+  position: absolute;
+  z-index: 10;
+  width: var(--anchor);
+  height: var(--anchor);
+}
+
+.anchor.tl { left: 5mm; top: 5mm; }
+.anchor.tr { right: 5mm; top: 5mm; }
+.anchor.bl { left: 5mm; bottom: 5mm; }
+.anchor.br { right: 5mm; bottom: 5mm; }
+
+.title {
+  position: absolute;
+  top: 15mm;
+  left: 20mm;
+  right: 20mm;
+  text-align: center;
+}
+
+.title h1 {
+  margin: 0;
+  font-size: 17pt;
+  line-height: 1.2;
+  letter-spacing: 0.3mm;
+}
+
+.student-info {
+  position: absolute;
+  top: 32mm;
+  left: 17mm;
+  right: 17mm;
+  font-size: 10.5pt;
+  line-height: 1.8;
+}
+
+.student-info .row {
+  display: grid;
+  grid-template-columns: 1fr 38mm 38mm;
+  gap: 8mm;
+}
+
+.field {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3mm;
+  white-space: nowrap;
+}
+
+.line {
+  flex: 1;
+  min-width: 24mm;
+  border-bottom: 0.25mm dotted #555;
+  height: 5mm;
+}
+
+.region {
+  position: absolute;
+}
+
+/*
+  Positions are compensated for the 5mm page anchors. After perspectiveWarp(),
+  the table boxes land on the 800 x 1100 REGION/ANSWER_REGIONS values in app.js.
+*/
+.region-sbd {
+  left: 11.1%;
+  top: 19.65%;
+  width: 41.7%;
+  height: 23.7%;
+}
+
+.region-code {
+  left: 61.1%;
+  top: 19.65%;
+  width: 23.2%;
+  height: 23.7%;
+}
+
+.answer-panel[data-panel="1"] {
+  left: 11.1%;
+  top: 50%;
+  width: 36.1%;
+  height: 17.1%;
+}
+
+.answer-panel[data-panel="2"] {
+  left: 52.8%;
+  top: 50%;
+  width: 36.1%;
+  height: 17.1%;
+}
+
+.answer-panel[data-panel="3"] {
+  left: 11.1%;
+  top: 70.8%;
+  width: 36.1%;
+  height: 17.1%;
+}
+
+.answer-panel[data-panel="4"] {
+  left: 52.8%;
+  top: 70.8%;
+  width: 36.1%;
+  height: 17.1%;
+}
+
+.section-title {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 2mm);
+  text-align: center;
+  font-weight: 800;
+  font-size: 9.5pt;
+  text-transform: uppercase;
+}
+
+.answer-panel .section-title {
+  bottom: calc(100% + 6mm);
+}
+
+.answer-head {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 1.1mm);
+  display: grid;
+  grid-template-columns: 28% repeat(4, 1fr);
+  font-size: 8.5pt;
+  font-weight: 800;
+  text-align: center;
+}
+
+.number-grid,
+.answer-grid {
+  width: 100%;
+  height: 100%;
+  border: 0.3mm solid var(--ink);
+  background: var(--paper);
+}
+
+.number-grid {
+  display: grid;
+  grid-template-columns: 18% repeat(var(--cols), 1fr);
+  grid-template-rows: repeat(10, 1fr);
+}
+
+.answer-grid {
+  display: grid;
+  grid-template-columns: 28% repeat(4, 1fr);
+  grid-template-rows: repeat(10, 1fr);
+}
+
+.cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  border-right: 0.22mm solid var(--line);
+  border-bottom: 0.22mm solid var(--line);
+  font-size: 8pt;
+  font-weight: 700;
+}
+
+.number-grid:not(.code-grid) .cell:nth-child(7n),
+.code-grid .cell:nth-child(4n),
+.answer-grid .cell:nth-child(5n) {
+  border-right: 0;
+}
+
+.number-grid:not(.code-grid) .cell:nth-last-child(-n + 7),
+.code-grid .cell:nth-last-child(-n + 4),
+.answer-grid .cell:nth-last-child(-n + 5) {
+  border-bottom: 0;
+}
+
+.bubble {
+  width: var(--bubble);
+  height: var(--bubble);
+  border: var(--bubble-border) solid var(--ink);
+  border-radius: 50%;
+  background: var(--paper);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.region-marker {
+  position: absolute;
+  z-index: 6;
+  width: var(--marker);
+  height: var(--marker);
+  pointer-events: none;
+}
+
+.region-marker.tl {
+  left: calc(-1 * var(--marker-gap));
+  top: calc(-1 * var(--marker-gap));
+}
+
+.region-marker.tr {
+  right: calc(-1 * var(--marker-gap));
+  top: calc(-1 * var(--marker-gap));
+}
+
+.region-marker.bl {
+  left: calc(-1 * var(--marker-gap));
+  bottom: calc(-1 * var(--marker-gap));
+}
+
+.region-marker.br {
+  right: calc(-1 * var(--marker-gap));
+  bottom: calc(-1 * var(--marker-gap));
+}
+
+.footer {
+  position: absolute;
+  left: 17mm;
+  right: 17mm;
+  bottom: 9mm;
+  padding-top: 2mm;
+  border-top: 0.25mm dotted #aaa;
+  color: var(--muted);
+  text-align: center;
+  font-size: 8pt;
+}
+
+@page {
+  size: A4 portrait;
+  margin: 0;
+}
+
+@media print {
+  html,
   body {
-    font-family: 'Segoe UI', Arial, sans-serif;
-    background: #e2e8f0; margin: 0; padding: 20px;
-    display: flex; flex-direction: column; align-items: center;
+    width: var(--page-w);
+    height: var(--page-h);
+    margin: 0;
+    padding: 0;
+    background: #fff;
   }
+
+  body {
+    display: block;
+  }
+
   .controls {
-    background: white; padding: 12px 24px; border-radius: 10px;
-    box-shadow: 0 4px 6px rgba(0,0,0,.1); margin-bottom: 20px;
-    display: flex; gap: 15px; align-items: center;
+    display: none !important;
   }
-  select, button { font-size: 14px; padding: 7px 14px; border-radius: 6px; }
-  button { background: var(--accent); color: white; border: none; cursor: pointer; font-weight: bold; }
-  button:hover { background: #b03a16; }
 
-  /* ══ A4 — CỨNG 210×297mm, KHÔNG tràn trang ════════════════ */
   .a4-page {
-    width: 210mm;
-    height: 297mm;          /* cố định — không dùng min-height */
-    overflow: hidden;       /* cắt nếu lệch tính toán */
-    background: white;
-    box-shadow: 0 10px 20px rgba(0,0,0,.15);
-    position: relative;
-    box-sizing: border-box;
+    width: var(--page-w);
+    height: var(--page-h);
+    margin: 0;
+    overflow: hidden;
+    box-shadow: none;
+    page-break-before: avoid;
+    page-break-after: avoid;
+    page-break-inside: avoid;
   }
 
-  /* ══ ANCHOR (4 góc) ════════════════════════════════════════ */
-  .anc {
-    position: absolute;
-    width: 0; height: 0;
-    border: 14px solid black;
-    z-index: 10;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-  .anc.tl { top: 6px; left: 6px; }
-  .anc.tr { top: 6px; right: 6px; }
-  .anc.bl { bottom: 6px; left: 6px; }
-  .anc.br { bottom: 6px; right: 6px; }
-
-  /* ══ TIMING MARKS ══════════════════════════════════════════ */
-  .tm-col {
-    position: absolute;
-    display: flex;
-    flex-direction: column;
-    z-index: 5;
-  }
-  .tm {
-    background: black;
-    width: 9px;
-    flex-shrink: 0;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
+  .anchor,
+  .region-marker {
+    background: #000 !important;
   }
 
-  /* ══ Wrapper co giãn để vừa 1 trang ═══════════════════════
-     JS sẽ tính scale = 297mm / nội_dung_thực_tế và áp vào đây
-  ══════════════════════════════════════════════════════════ */
-  .inner {
-    position: absolute;
-    top: 0; left: 0;
-    width: 210mm;
-    transform-origin: top left;
-    /* scale sẽ set bằng JS sau khi render */
-  }
-
-  /* ══ Nội dung ══════════════════════════════════════════════ */
-  .content {
-    padding: 10mm 14mm 8mm 18mm;
-    box-sizing: border-box;
-  }
-
-  .school-info h2 { margin: 0 0 3px; font-size: 15px; color: #222; font-weight: 700; }
-  .school-info p  { margin: 0; font-size: 12px; color: #555; }
-  .student-info   { margin-top: 7px; font-size: 12px; line-height: 2; }
-  .uline { border-bottom: 1px dotted #444; display: inline-block; }
-
-  /* ══ OMR Frame ══════════════════════════════════════════════ */
-  .omr-frame {
-    position: relative;
-    width: 100%;
-    /* height tự động — JS scale sẽ co vừa trang */
-    margin-top: 5mm;
-  }
-  .region {
-    position: absolute;
-    box-sizing: border-box;
-  }
-  .bubble-grid {
-    display: grid;
-    width: 100%; height: 100%;
-    align-items: center; justify-items: center;
-  }
-  .region-title {
-    position: absolute; top: -18px; left: 0; width: 100%;
-    text-align: center; font-weight: bold; font-size: 10px;
-    color: var(--accent); text-transform: uppercase; letter-spacing: .5px;
-  }
   .bubble {
-    width: 17px; height: 17px;
-    border: 1.5px solid #000;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 8px; font-weight: bold; color: #000;
-    background: white;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
+    border-color: #000 !important;
+    background: #fff !important;
   }
-  .q-num {
-    font-size: 11px; font-weight: bold; color: #333;
-    display: flex; justify-content: flex-end;
-    padding-right: 5px; align-items: center;
-  }
-
-  /* ══ Print ═════════════════════════════════════════════════ */
-  @media print {
-    body { background: transparent; padding: 0; margin: 0; }
-    .controls { display: none; }
-    .a4-page {
-      box-shadow: none; margin: 0;
-      width: 210mm; height: 297mm;
-      overflow: hidden;
-      page-break-after: avoid;
-    }
-    * {
-      -webkit-print-color-adjust: exact !important;
-      print-color-adjust: exact !important;
-      color-adjust: exact !important;
-    }
-    .anc  { border: 14px solid black !important; }
-    .tm   { background: black !important; }
-  }
+}
 </style>
 </head>
 <body>
-
 <div class="controls">
-  <label><b>Số câu hỏi:</b></label>
-  <select id="numQ" onchange="renderSheet()">
-    <option value="15">15 Câu</option>
-    <option value="20" selected>20 Câu</option>
-    <option value="30">30 Câu</option>
-    <option value="40">40 Câu</option>
+  <label for="numQ">Số câu:</label>
+  <select id="numQ">
+    <option value="10">10 câu</option>
+    <option value="20" selected>20 câu</option>
+    <option value="30">30 câu</option>
+    <option value="40">40 câu</option>
   </select>
-  <button onclick="window.print()">🖨 In Phiếu OMR</button>
+  <button type="button" onclick="window.print()">In phiếu OMR</button>
 </div>
 
-<div class="a4-page" id="a4">
-  <!-- 4 Anchor góc — nằm ngoài .inner để luôn ở đúng góc A4 -->
-  <div class="anc tl"></div>
-  <div class="anc tr"></div>
-  <div class="anc bl"></div>
-  <div class="anc br"></div>
+<main class="a4-page" id="sheet">
+  <div class="anchor tl"></div>
+  <div class="anchor tr"></div>
+  <div class="anchor bl"></div>
+  <div class="anchor br"></div>
 
-  <!-- Timing marks — vị trí set bằng JS sau scale -->
-  <div class="tm-col" id="tmSBD"  style="left:36px;"></div>
-  <div class="tm-col" id="tmAnsL" style="left:36px;"></div>
-  <div class="tm-col" id="tmAnsR" style="right:36px;"></div>
+  <header class="title">
+    <h1>PHIẾU TRẢ LỜI TRẮC NGHIỆM</h1>
+  </header>
 
-  <!-- Wrapper sẽ bị scale để vừa 297mm -->
-  <div class="inner" id="inner">
-    <div class="content">
-      <div class="school-info">
-        <h2>PHIẾU TRẢ LỜI TRẮC NGHIỆM</h2>
-        <p>Kỳ thi / Bài kiểm tra: <span class="uline" style="width:180px"></span></p>
-        <div class="student-info">
-          Họ và tên: <span class="uline" style="width:220px"></span><br>
-          Lớp: <span class="uline" style="width:80px"></span> &nbsp;
-          Ngày: <span class="uline" style="width:80px"></span>
-        </div>
-      </div>
-
-      <!-- OMR Frame -->
-      <div class="omr-frame" id="omrFrame">
-        <div id="regSBD"   class="region" style="left:12%;top:22%;width:30%;height:28%;">
-          <div class="region-title">Số Báo Danh</div>
-          <div id="gridSBD" class="bubble-grid"></div>
-        </div>
-        <div id="regCODE"  class="region" style="left:55%;top:22%;width:15%;height:28%;">
-          <div class="region-title">Mã Đề</div>
-          <div id="gridCODE" class="bubble-grid"></div>
-        </div>
-        <div id="regLeft"  class="region" style="left:4%; top:54%;width:44%;height:44%;"></div>
-        <div id="regRight" class="region" style="left:52%;top:54%;width:44%;height:44%;"></div>
-      </div>
+  <section class="student-info">
+    <div class="field">Kỳ thi / Bài kiểm tra:<span class="line"></span></div>
+    <div class="row">
+      <div class="field">Họ và tên:<span class="line"></span></div>
+      <div class="field">Lớp:<span class="line"></span></div>
+      <div class="field">Ngày:<span class="line"></span></div>
     </div>
-  </div>
-</div>
+  </section>
+
+  <section class="region region-sbd" aria-label="Số báo danh">
+    <span class="region-marker sbd tl"></span>
+    <span class="region-marker sbd tr"></span>
+    <span class="region-marker sbd bl"></span>
+    <span class="region-marker sbd br"></span>
+    <div class="section-title">Số báo danh</div>
+    <div class="number-grid" id="sbdGrid" style="--cols: 6"></div>
+  </section>
+
+  <section class="region region-code" aria-label="Mã đề">
+    <span class="region-marker code tl"></span>
+    <span class="region-marker code tr"></span>
+    <span class="region-marker code bl"></span>
+    <span class="region-marker code br"></span>
+    <div class="section-title">Mã đề</div>
+    <div class="number-grid code-grid" id="codeGrid" style="--cols: 3"></div>
+  </section>
+
+  <div id="answerPanels"></div>
+
+  <footer class="footer">
+    Dùng bút chì tô đậm kín một ô tròn cho mỗi dòng. Xóa sạch nếu muốn sửa. Không bôi bẩn hoặc gấp phiếu.
+  </footer>
+</main>
+
+<template id="answerPanelTemplate">
+  <section class="region answer-panel" aria-label="">
+    <span class="region-marker ans-panel tl"></span>
+    <span class="region-marker ans-panel tr"></span>
+    <span class="region-marker ans-panel bl"></span>
+    <span class="region-marker ans-panel br"></span>
+    <div class="section-title"></div>
+    <div class="answer-head"><span></span><span>A</span><span>B</span><span>C</span><span>D</span></div>
+    <div class="answer-grid"></div>
+  </section>
+</template>
 
 <script>
-const MM_TO_PX = 96 / 25.4; // 1mm = 3.779px tại 96dpi
-const PAGE_H_MM = 297;
+const SUPPORTED_QUESTIONS = [10, 20, 30, 40];
+const DEFAULT_QUESTIONS = 20;
 
-function renderSheet() {
-  const numQ = parseInt(document.getElementById('numQ').value);
-  const half = Math.ceil(numQ / 2);
-
-  // SBD
-  const sbd = document.getElementById('gridSBD');
-  sbd.style.gridTemplateColumns = 'repeat(6,1fr)';
-  sbd.style.gridTemplateRows    = 'repeat(10,1fr)';
-  sbd.innerHTML = '';
-  for (let r = 0; r < 10; r++)
-    for (let c = 0; c < 6; c++)
-      sbd.innerHTML += `<div class="bubble">${r}</div>`;
-
-  // Mã đề
-  const code = document.getElementById('gridCODE');
-  code.style.gridTemplateColumns = 'repeat(3,1fr)';
-  code.style.gridTemplateRows    = 'repeat(10,1fr)';
-  code.innerHTML = '';
-  for (let r = 0; r < 10; r++)
-    for (let c = 0; c < 3; c++)
-      code.innerHTML += `<div class="bubble">${r}</div>`;
-
-  // Câu hỏi — tính chiều cao OMR frame để vừa 1 trang
-  const nLeft  = half;
-  const nRight = numQ - half;
-
-  // Tính chiều cao khả dụng cho omr-frame
-  // = 297mm - padding_top(10mm) - header_est(28mm) - margin_top(5mm) - padding_bot(8mm)
-  const headerMM = 28 + 5;
-  const paddingMM = 10 + 8;
-  const frameMM = PAGE_H_MM - headerMM - paddingMM; // ~246mm
-  document.getElementById('omrFrame').style.height = frameMM + 'mm';
-
-  renderPanel('regLeft',  1,        half,   nLeft);
-  renderPanel('regRight', half + 1, numQ,   nRight);
-
-  // Scale và timing marks sau khi layout xong
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    scaleToFit();
-    requestAnimationFrame(() => requestAnimationFrame(placeTimingMarks));
-  }));
+function getQuestionCount() {
+  const params = new URLSearchParams(window.location.search);
+  const n = Number.parseInt(params.get('n') || params.get('q') || DEFAULT_QUESTIONS, 10);
+  if (SUPPORTED_QUESTIONS.includes(n)) return n;
+  return DEFAULT_QUESTIONS;
 }
 
-function renderPanel(id, startQ, endQ, n) {
-  const el = document.getElementById(id);
-  if (n <= 0) { el.innerHTML = ''; return; }
-  el.innerHTML = `<div class="bubble-grid"
-    style="grid-template-columns:28% repeat(4,18%);grid-template-rows:repeat(${n},1fr);">
-    ${Array.from({length:n}).map((_,i) => {
-      const q = startQ + i;
-      return `<div class="q-num">Câu ${q}:</div>
-              <div class="bubble">A</div><div class="bubble">B</div>
-              <div class="bubble">C</div><div class="bubble">D</div>`;
-    }).join('')}
-  </div>`;
+function bubbleCell() {
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  cell.innerHTML = '<span class="bubble" aria-hidden="true"></span>';
+  return cell;
 }
 
-// ── Scale nội dung vừa khít 297mm ───────────────────────────
-function scaleToFit() {
-  const inner = document.getElementById('inner');
-  inner.style.transform = 'none'; // reset trước khi đo
-
-  const innerH  = inner.getBoundingClientRect().height;
-  const pageHpx = PAGE_H_MM * MM_TO_PX;
-
-  if (innerH > pageHpx) {
-    const scale = pageHpx / innerH;
-    inner.style.transform = `scale(${scale})`;
-    inner.style.transformOrigin = 'top left';
-  }
-}
-
-// ── Timing marks theo vị trí DOM thực tế ────────────────────
-function placeTimingMarks() {
-  const a4Rect = document.getElementById('a4').getBoundingClientRect();
-
-  // SBD — 10 hàng
-  const sbdBubbles = document.querySelectorAll('#gridSBD .bubble');
-  if (sbdBubbles.length === 60) {
-    buildTM('tmSBD', Array.from({length:10}, (_,r) => sbdBubbles[r*6]), a4Rect, 6, 10);
-  }
-  // Câu hỏi trái/phải
-  buildAnsTM('regLeft',  'tmAnsL', a4Rect, 7);
-  buildAnsTM('regRight', 'tmAnsR', a4Rect, 7);
-}
-
-function buildTM(tmId, rowEls, a4Rect, markH, count) {
-  const tmEl = document.getElementById(tmId);
-  tmEl.innerHTML = '';
-  if (!rowEls.length) return;
-
-  const ys = rowEls.map(el => {
-    const r = el.getBoundingClientRect();
-    return r.top - a4Rect.top + r.height / 2;
-  });
-
-  tmEl.style.top = (ys[0] - markH/2) + 'px';
-  for (let i = 0; i < ys.length; i++) {
-    const tm = document.createElement('div');
-    tm.className = 'tm';
-    tm.style.height = markH + 'px';
-    if (i < ys.length - 1) {
-      const gap = ys[i+1] - ys[i] - markH;
-      tm.style.marginBottom = Math.max(0, gap) + 'px';
+function renderNumberGrid(grid, cols) {
+  grid.innerHTML = '';
+  for (let digit = 0; digit < 10; digit++) {
+    const label = document.createElement('div');
+    label.className = 'cell';
+    label.textContent = digit;
+    grid.appendChild(label);
+    for (let col = 0; col < cols; col++) {
+      grid.appendChild(bubbleCell());
     }
-    tmEl.appendChild(tm);
   }
 }
 
-function buildAnsTM(panelId, tmId, a4Rect, markH) {
-  const rows = document.querySelectorAll(`#${panelId} .q-num`);
-  if (!rows.length) return;
-  buildTM(tmId, Array.from(rows), a4Rect, markH, rows.length);
+function renderAnswerPanel(panel, index, start, end) {
+  panel.dataset.panel = String(index);
+  panel.classList.add(`ans-panel-${index}`);
+  panel.setAttribute('aria-label', `Câu ${start} đến ${end}`);
+  const sideClass = index % 2 === 1 ? 'ans-left' : 'ans-right';
+  panel.querySelectorAll('.region-marker').forEach(marker => {
+    marker.classList.add(sideClass, `ans-panel-${index}`);
+  });
+  panel.querySelector('.section-title').textContent = `CÂU ${start} - ${end}`;
+
+  const grid = panel.querySelector('.answer-grid');
+  grid.innerHTML = '';
+  for (let q = start; q <= end; q++) {
+    const qCell = document.createElement('div');
+    qCell.className = 'cell';
+    qCell.textContent = q;
+    grid.appendChild(qCell);
+    for (let i = 0; i < 4; i++) {
+      grid.appendChild(bubbleCell());
+    }
+  }
 }
 
-renderSheet();
+function renderSheet(numQ) {
+  renderNumberGrid(document.getElementById('sbdGrid'), 6);
+  renderNumberGrid(document.getElementById('codeGrid'), 3);
+
+  const holder = document.getElementById('answerPanels');
+  const template = document.getElementById('answerPanelTemplate');
+  holder.innerHTML = '';
+
+  const panelCount = Math.ceil(numQ / 10);
+  for (let i = 1; i <= panelCount; i++) {
+    const panel = template.content.firstElementChild.cloneNode(true);
+    const start = (i - 1) * 10 + 1;
+    const end = Math.min(i * 10, numQ);
+    renderAnswerPanel(panel, i, start, end);
+    holder.appendChild(panel);
+  }
+
+  const select = document.getElementById('numQ');
+  select.value = String(numQ);
+  window.history.replaceState({}, '', `${window.location.pathname}?n=${numQ}`);
+}
+
+document.getElementById('numQ').addEventListener('change', (event) => {
+  renderSheet(Number.parseInt(event.target.value, 10));
+});
+
+renderSheet(getQuestionCount());
 </script>
 </body>
 </html>

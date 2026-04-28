@@ -14,6 +14,14 @@ const OPTS = ['A','B','C','D'];
 //  OPENCVREADY
 // ════════════════════════════════════════════════════════════════
 function onOpenCvReady() {
+  if (typeof cv === 'undefined') {
+    return;
+  }
+  if (typeof cv.Mat === 'undefined' && typeof cv.onRuntimeInitialized !== 'undefined') {
+    cv.onRuntimeInitialized = onOpenCvReady;
+    return;
+  }
+
   cvReady = true;
   const badge = document.getElementById('cvStatus');
   badge.textContent = '✅ OpenCV sẵn sàng';
@@ -74,7 +82,7 @@ function clearKey() {
 
 function saveKey() {
   const name  = document.getElementById('exam-name').value.trim() || 'Bài kiểm tra';
-  const code  = document.getElementById('exam-code').value.trim() || '001';
+  const code  = (document.getElementById('exam-code').value.trim() || '001').padStart(3, '0').slice(-3);
   const scale = +document.getElementById('exam-scale').value;
   const n     = +document.getElementById('exam-n').value;
   const a     = {};
@@ -224,6 +232,8 @@ async function processImage(src, filename, keyId) {
     document.getElementById('ps'+i).className = 'ps ' + st;
   };
 
+  const flags = [];
+
   // ── Bước 0: Tải ảnh ───────────────────────────────────────
   setStep(0,'active');
   const img = await loadImage(src);
@@ -236,7 +246,7 @@ async function processImage(src, filename, keyId) {
     return;
   }
 
-  // ── Bước 1: Tiền xử lý ────────────────────────────────────
+  // ── Bước 1: Tiền xử lý — adaptive threshold thông minh ─
   setStep(1,'active');
   let src_mat, gray, blurred, binary;
   try {
@@ -246,10 +256,15 @@ async function processImage(src, filename, keyId) {
     binary  = new cv.Mat();
 
     cv.cvtColor(src_mat, gray, cv.COLOR_RGBA2GRAY);
+
+    // Phân tích ảnh để chọn thông số threshold phù hợp
+    const imgStats = analyzeImageStats(gray);
+    const threshParams = getAdaptiveParams(imgStats);
+
     cv.GaussianBlur(gray, blurred, new cv.Size(5,5), 0);
-    // Adaptive threshold — chịu được ánh sáng không đều
     cv.adaptiveThreshold(blurred, binary, 255,
-      cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 15, 8);
+      threshParams.method, cv.THRESH_BINARY_INV,
+      threshParams.blockSize, threshParams.C);
 
     addPreview(prevRow, matToCanvas(binary), 'Nhị phân hóa');
     setStep(1,'done');
@@ -264,36 +279,52 @@ async function processImage(src, filename, keyId) {
   try {
     const anchors = findAnchorSquares(binary, src_mat);
     if (anchors) {
-      addPreview(prevRow, drawAnchorDebug(src_mat, anchors), 'Điểm neo');
+      addPreview(prevRow, drawAnchorDebug(src_mat, anchors), anchors.recovered ? 'Điểm neo (edge recovery)' : 'Điểm neo');
       setStep(2,'done');
       // ── Bước 3: Kéo phẳng ─────────────────────────────────
       setStep(3,'active');
       warpedMat   = perspectiveWarp(binary,   anchors, 800, 1100);
       warpedColor = perspectiveWarp(src_mat,  anchors, 800, 1100);
-      addPreview(prevRow, matToCanvas(warpedColor), 'Sau kéo phẳng');
+      addPreview(prevRow, matToCanvas(warpedColor), anchors.recovered ? 'Sau kéo phẳng (ước lượng)' : 'Sau kéo phẳng');
       setStep(3,'done');
+      // Cảnh báo nếu dùng edge recovery
+      if (anchors.recovered) {
+        flags.push({ type:'warn', msg:'Không tìm đủ 4 ô neo, dùng cạnh phiếu để căn chỉnh — kết quả có thể kém chính xác hơn' });
+      }
     } else {
       // Không tìm được neo → dùng toàn bộ ảnh, resize về chuẩn
       setStep(2,'warn');
       warpedMat   = resizeMat(binary,   800, 1100);
       warpedColor = resizeMat(src_mat,  800, 1100);
-      addPreview(prevRow, matToCanvas(warpedColor), '⚠ Không tìm neo');
+      addPreview(prevRow, matToCanvas(warpedColor), '⚠ Không tìm neo — dùng resize');
       setStep(3,'warn');
+      flags.push({ type:'warn', msg:'Không tìm được điểm neo — kéo phẳng thủ công sẽ giảm độ chính xác' });
     }
   } catch(e) {
     setStep(2,'warn');
     warpedMat   = resizeMat(binary,   800, 1100);
     warpedColor = resizeMat(src_mat,  800, 1100);
     setStep(3,'warn');
+    flags.push({ type:'warn', msg:'Lỗi tìm điểm neo: ' + e.message });
   }
 
   // ── Bước 4: Đọc SBD + Mã đề từ vùng bong bóng số ─────────
   setStep(4,'active');
   let detectedSBD  = '';
   let detectedCode = '';
+  let detectedRegions = {
+    SBD: { ...REGION.SBD, detected: false },
+    CODE: { ...REGION.CODE, detected: false },
+    ANSWERS: getAnswerRegions(key.n).map(region => ({ ...region, detected: false }))
+  };
   try {
-    detectedSBD  = readBubbleNumber(warpedMat, REGION.SBD,  6);
-    detectedCode = readBubbleNumber(warpedMat, REGION.CODE, 3);
+    detectedRegions = detectOmrRegions(warpedMat, key.n);
+  } catch(e) {
+    flags.push({ type:'warn', msg:'Không đọc được marker vùng — dùng tọa độ mặc định' });
+  }
+  try {
+    detectedSBD  = readBubbleNumber(warpedMat, detectedRegions.SBD,  6);
+    detectedCode = readBubbleNumber(warpedMat, detectedRegions.CODE, 3);
     setStep(4,'done');
   } catch(e) {
     setStep(4,'warn');
@@ -302,12 +333,11 @@ async function processImage(src, filename, keyId) {
   // ── Bước 5: Nhận dạng câu trả lời ─────────────────────────
   setStep(5,'active');
   let detected = {};
-  const flags  = [];
   try {
-    const result = readAnswerBubbles(warpedMat, key.n);
+    const result = readAnswerBubbles(warpedMat, key.n, detectedRegions.ANSWERS);
     detected = result.answers;
     result.flags.forEach(f => flags.push(f));
-    addPreview(prevRow, drawAnswerDebug(warpedColor, key.n), 'Vùng nhận dạng');
+    addPreview(prevRow, drawAnswerDebug(warpedColor, key.n, detectedRegions.ANSWERS), 'Vùng nhận dạng');
     setStep(5,'done');
   } catch(e) {
     setStep(5,'error');
@@ -347,34 +377,36 @@ async function processImage(src, filename, keyId) {
 // ════════════════════════════════════════════════════════════════
 //  ĐỊNH NGHĨA VÙNG (tọa độ %, chuẩn 800×1100)
 // ════════════════════════════════════════════════════════════════
-// Dựa trên mẫu phiếu: SBD 6 cột số 0-9, CODE 3 cột, vùng 20 câu 2 panel
+// Tọa độ vùng đọc khớp phieu_in.html, chuẩn ảnh đã kéo phẳng 800 x 1100.
+// Chỉ dùng 4 ô neo góc; timing marks đã bị vô hiệu hóa để tránh nhiễu ô đen phụ.
 const W = 800, H = 1100;
 
 const REGION = {
-  // Số báo danh: ô vuông 6 cột × 10 hàng (số 0-9)
-  // Ước lượng từ mẫu phiếu (~12–42% chiều rộng, ~22–50% chiều cao)
-  SBD: {
-    x: 0.12, y: 0.22, w: 0.30, h: 0.28,
-    cols: 6, rows: 10
-  },
-  // Mã đề: 3 cột × 10 hàng (bên phải SBD)
-  CODE: {
-    x: 0.55, y: 0.22, w: 0.15, h: 0.28,
-    cols: 3, rows: 10
-  },
-  // Vùng trả lời: 2 panel (trái Q1→half, phải Q(half+1)→n)
-  ANS_LEFT: {
-    x: 0.04, y: 0.54, w: 0.44, h: 0.44
-  },
-  ANS_RIGHT: {
-    x: 0.52, y: 0.54, w: 0.44, h: 0.44
-  }
+  // Số báo danh: 6 cột x 10 hàng số 0-9.
+  SBD: { name: 'SBD', x: 0.08, y: 0.18, w: 0.45, h: 0.25, cols: 6, rows: 10 },
+  // Mã đề: 3 cột x 10 hàng số 0-9.
+  CODE: { name: 'CODE', x: 0.62, y: 0.18, w: 0.25, h: 0.25, cols: 3, rows: 10 }
+};
+
+const ANSWER_REGIONS = [
+  { name: 'ANS_1', from: 1,  to: 10, x: 0.08, y: 0.50, w: 0.39, h: 0.18 },
+  { name: 'ANS_2', from: 11, to: 20, x: 0.53, y: 0.50, w: 0.39, h: 0.18 },
+  { name: 'ANS_3', from: 21, to: 30, x: 0.08, y: 0.72, w: 0.39, h: 0.18 },
+  { name: 'ANS_4', from: 31, to: 40, x: 0.53, y: 0.72, w: 0.39, h: 0.18 }
+];
+
+const REGION_MARKER = {
+  searchPad: 28,
+  innerGap: 9,
+  minSize: 3,
+  maxSize: 18
 };
 
 // ════════════════════════════════════════════════════════════════
 //  TÌM 4 ĐIỂM NEO (ô vuông đen ở 4 góc)
 // ════════════════════════════════════════════════════════════════
 function findAnchorSquares(binMat, colorMat) {
+  // ── Bước 1: Tìm contour như cũ ─────────────────────────────
   const contours = new cv.MatVector();
   const hierarchy = new cv.Mat();
   cv.findContours(binMat.clone(), contours, hierarchy,
@@ -390,7 +422,6 @@ function findAnchorSquares(binMat, colorMat) {
     const approx = new cv.Mat();
     cv.approxPolyDP(cnt, approx, 0.04 * peri, true);
 
-    // Điểm neo phải là hình vuông (~4 cạnh), diện tích hợp lý
     if (approx.rows === 4) {
       const minA = W * H * 0.0004;
       const maxA = W * H * 0.015;
@@ -410,17 +441,104 @@ function findAnchorSquares(binMat, colorMat) {
   }
   contours.delete(); hierarchy.delete();
 
-  if (candidates.length < 4) return null;
+  // ── Bước 2: Đủ 4 anchors → chọn 4 góc ──────────────────────
+  if (candidates.length >= 4) {
+    const tl = candidates.sort((a,b) => (a.cx+a.cy)-(b.cx+b.cy))[0];
+    const br = candidates.sort((a,b) => (b.cx+b.cy)-(a.cx+a.cy))[0];
+    const tr = candidates.sort((a,b) => (b.cx-b.cy)-(a.cx-a.cy))[0];
+    const bl = candidates.sort((a,b) => (a.cx-a.cy)-(b.cx-b.cy))[0];
+    if (!tl || !br || !tr || !bl) return null;
 
-  // Chọn 4 ô ở 4 góc
-  const tl = candidates.sort((a,b) => (a.cx+a.cy)-(b.cx+b.cy))[0];
-  const br = candidates.sort((a,b) => (b.cx+b.cy)-(a.cx+a.cy))[0];
-  const tr = candidates.sort((a,b) => (b.cx-b.cy)-(a.cx-a.cy))[0];
-  const bl = candidates.sort((a,b) => (a.cx-a.cy)-(b.cx-b.cy))[0];
+    // Kiểm tra khoảng cách hợp lý (4 anchors phải cách nhau đủ xa)
+    const minDist = Math.min(
+      Math.hypot(br.cx - tl.cx, br.cy - tl.cy),
+      Math.hypot(tl.cx - tr.cx, tr.cy - tl.cy),
+      Math.hypot(br.cx - bl.cx, bl.cy - br.cy),
+      Math.hypot(tr.cx - br.cx, tr.cy - br.cy)
+    );
+    if (minDist < W * 0.15) return null; // anchors quá gần nhau → có thể là nhiễu
+    return { tl, tr, br, bl };
+  }
 
-  // Validate: phải phủ đủ 4 góc
-  if (!tl || !br || !tr || !bl) return null;
-  return { tl, tr, br, bl };
+  // ── Bước 3: Không đủ 4 → thử edge recovery ─────────────────
+  if (candidates.length >= 2) {
+    const recovered = tryEdgeRecovery(binMat, candidates);
+    if (recovered) return recovered;
+  }
+
+  return null;
+}
+
+/**
+ * Recovery bằng Canny + Hough Lines khi không tìm đủ 4 anchor squares
+ */
+function tryEdgeRecovery(binMat, existingAnchors) {
+  const W = binMat.cols, H = binMat.rows;
+  const edges = new cv.Mat();
+  const lines = new cv.Mat();
+
+  // Phát hiện cạnh mạnh
+  cv.Canny(binMat.clone(), edges, 50, 150, 3, false);
+
+  // Hough transform để tìm các đường thẳng (cạnh phiếu)
+  cv.HoughLinesP(edges, lines, 1, Math.PI/180, 80, H*0.2, W*0.05);
+
+  if (lines.rows < 4) { edges.delete(); lines.delete(); return null; }
+
+  // Gom nhóm các đường thẳng → 4 cạnh biên của phiếu
+  const verticals = [], horizontals = [];
+  for (let i = 0; i < lines.rows; i++) {
+    const p = lines.data32S.slice(i*4, i*4+4);
+    const dx = p[2]-p[0], dy = p[3]-p[1];
+    if (Math.abs(dx) < 10) {
+      verticals.push({ x: (p[0]+p[2])/2, y1: Math.min(p[1],p[3]), y2: Math.max(p[1],p[3]) });
+    } else if (Math.abs(dy) < 10) {
+      horizontals.push({ y: (p[1]+p[3])/2, x1: Math.min(p[0],p[2]), x2: Math.max(p[0],p[2]) });
+    }
+  }
+  edges.delete(); lines.delete();
+
+  if (verticals.length < 2 || horizontals.length < 2) return null;
+
+  // Lấy đường biên ngoài cùng (trái/phải/trên/dưới)
+  const leftX   = Math.min(...verticals.map(v=>v.x));
+  const rightX  = Math.max(...verticals.map(v=>v.x));
+  const topY    = Math.min(...horizontals.map(h=>h.y));
+  const bottomY = Math.max(...horizontals.map(h=>h.y));
+
+  // Kiểm tra tỷ lệ hợp lý (A4 ~ 1:1.414)
+  const width  = rightX - leftX;
+  const height = bottomY - topY;
+  const ratio  = height / width;
+  if (ratio < 1.0 || ratio > 2.0) return null; // Phải gần A4
+
+  // Gán tạm anchors = 4 góc từ edge, scale offset để lấy vùng trong của ô vuông
+  const offset = Math.round(Math.min(width, height) * 0.03);
+  const tl = { cx: leftX  + offset, cy: topY    + offset };
+  const tr = { cx: rightX - offset, cy: topY    + offset };
+  const br = { cx: rightX - offset, cy: bottomY - offset };
+  const bl = { cx: leftX  + offset, cy: bottomY - offset };
+
+  // Nếu có anchors cũ → blend với chúng để tăng độ chính xác
+  if (existingAnchors.length > 0) {
+    const blend = (a, b) => ({ cx: a.cx*0.6 + b.cx*0.4, cy: a.cy*0.6 + b.cy*0.4 });
+    // Tìm anchor gần nhất cho mỗi góc
+    const nearest = (corner) => existingAnchors.reduce((best, a) => {
+      const d = Math.hypot(a.cx - corner.cx, a.cy - corner.cy);
+      return d < best.dist ? { anchor: a, dist: d } : best;
+    }, { anchor: null, dist: Infinity });
+
+    const nTL = nearest(tl), nTR = nearest(tr), nBR = nearest(br), nBL = nearest(bl);
+    if (nTL.anchor) return {
+      tl: blend(nTL.anchor, tl),
+      tr: nTR.anchor ? blend(nTR.anchor, tr) : tr,
+      br: nBR.anchor ? blend(nBR.anchor, br) : br,
+      bl: nBL.anchor ? blend(nBL.anchor, bl) : bl,
+      recovered: true
+    };
+  }
+
+  return { tl, tr, br, bl, recovered: true };
 }
 
 function perspectiveWarp(mat, anchors, dstW, dstH) {
@@ -449,10 +567,71 @@ function resizeMat(mat, dstW, dstH) {
   return out;
 }
 
+/**
+ * Phân tích ảnh grayscale — trả về brightness, contrast, stdDev
+ */
+function analyzeImageStats(grayMat) {
+  const mean = new cv.Mat();
+  const std  = new cv.Mat();
+  cv.meanStdDev(grayMat, mean, std);
+  const brightness = mean.data64F[0] / 255;
+  const contrast   = std.data64F[0]  / 255;
+  mean.delete(); std.delete();
+  return { brightness, contrast };
+}
+
+/**
+ * Chọn thông số adaptive threshold dựa trên đặc điểm ảnh
+ */
+function getAdaptiveParams(stats) {
+  let blockSize, C, method;
+
+  // Chọn method: Gaussian cho ảnh noise nhiều, Mean cho ảnh đơn giản
+  method = stats.contrast > 0.15
+    ? cv.ADAPTIVE_THRESH_GAUSSIAN_C
+    : cv.ADAPTIVE_THRESH_MEAN_C;
+
+  // Block size: ảnh lớn → block lớn hơn để bao phủ vùng sáng/tối
+  if (stats.brightness < 0.3) {
+    // Ảnh tối → block lớn, C nhỏ (nhạy hơn với vùng sáng)
+    blockSize = 21; C = 5;
+  } else if (stats.brightness > 0.7) {
+    // Ảnh sáng → block lớn, C lớn (lọc nhiễu sáng)
+    blockSize = 25; C = 12;
+  } else if (stats.contrast < 0.1) {
+    // Ảnh mờ (low contrast) → block nhỏ hơn, C nhỏ
+    blockSize = 11; C = 4;
+  } else {
+    // Default: medium contrast/brightness
+    blockSize = 15; C = 8;
+  }
+
+  // Luôn dùng số lẻ cho blockSize
+  if (blockSize % 2 === 0) blockSize++;
+  if (blockSize < 3) blockSize = 3;
+
+  return { blockSize, C, method };
+}
+
+/**
+ * Phân tích chất lượng binary — trả về điểm số (0-1)
+ * Dùng để so sánh giữa các phương pháp threshold
+ */
+function scoreBinaryQuality(binaryMat) {
+  const total = binaryMat.rows * binaryMat.cols;
+  const white = cv.countNonZero(binaryMat);
+  const blackRatio = (total - white) / total;
+
+  // Ảnh tốt: khoảng 5-40% đen (vùng in + bubble), không quá nhiều noise
+  const score = blackRatio > 0.02 && blackRatio < 0.6
+    ? Math.min(blackRatio / 0.3, 1) * Math.min((0.5 - blackRatio) / 0.3, 1)
+    : 0;
+  return score;
+}
+
 // ════════════════════════════════════════════════════════════════
-//  ĐỌC TIMING MARKS — trả về mảng Y tâm của từng vạch
-//  Timing marks là dải vạch đen sát lề trái/phải, mỗi vạch = 1 hàng.
-//  Dùng để biết chính xác vị trí Y từng hàng SBD hoặc từng câu hỏi.
+//  ĐỌC TIMING MARKS — legacy, không dùng với mẫu phiếu hiện tại.
+//  Mẫu mới chỉ có 4 ô neo góc; mọi marker đen phụ bị loại bỏ để tránh nhiễu.
 // ════════════════════════════════════════════════════════════════
 
 /**
@@ -496,55 +675,173 @@ function scanTimingColumn(binMat, xStart, xEnd, y0, y1) {
 const TM_WIDTH = Math.round(W * 0.07); // ~7% chiều rộng = vùng timing marks
 
 function getTimingYs(binMat, y0, y1, expectedCount, side) {
-  const xStart = side === 'right' ? W - TM_WIDTH : 0;
-  const xEnd   = side === 'right' ? W            : TM_WIDTH;
-  const marks  = scanTimingColumn(binMat, xStart, xEnd, y0, y1);
-
-  // Lọc: giữ lại đủ số vạch ±2
-  if (Math.abs(marks.length - expectedCount) > 3) return null;
-
-  // Nếu nhiều hơn cần → chọn expectedCount vạch đều nhau nhất
-  if (marks.length > expectedCount) {
-    // Giữ expectedCount vạch đầu (thường đúng)
-    return marks.slice(0, expectedCount).map(m => Math.round(m.yCenter));
-  }
-  // Nếu ít hơn một chút → nội suy khoảng thiếu
-  if (marks.length < expectedCount && marks.length >= 2) {
-    const step = (marks[marks.length-1].yCenter - marks[0].yCenter) / (expectedCount - 1);
-    return Array.from({length: expectedCount}, (_, i) =>
-      Math.round(marks[0].yCenter + i * step));
-  }
-  return marks.map(m => Math.round(m.yCenter));
+  // Mẫu phiếu hiện tại không in timing marks; luôn dùng lưới tọa độ cố định.
+  return null;
 }
 
 // ════════════════════════════════════════════════════════════════
 //  ĐỌC BONG BÓNG SỐ (SBD / Mã đề) — có timing marks hỗ trợ
 //  cols × 10 hàng, mỗi hàng là chữ số 0-9
 // ════════════════════════════════════════════════════════════════
+function getAnswerRegions(numQ) {
+  const panelCount = Math.min(ANSWER_REGIONS.length, Math.ceil(numQ / 10));
+  return ANSWER_REGIONS.slice(0, panelCount).map((region, index) => ({
+    ...region,
+    from: index * 10 + 1,
+    to: Math.min((index + 1) * 10, numQ)
+  }));
+}
+
+function regionToPx(region, pad = 0) {
+  const x = Math.max(0, Math.round(region.x * W) - pad);
+  const y = Math.max(0, Math.round(region.y * H) - pad);
+  const r = Math.min(W, Math.round((region.x + region.w) * W) + pad);
+  const b = Math.min(H, Math.round((region.y + region.h) * H) + pad);
+  return { x, y, w: Math.max(1, r - x), h: Math.max(1, b - y) };
+}
+
+function normalizeRegionRect(rect, fallback) {
+  return {
+    ...fallback,
+    x: rect.x / W,
+    y: rect.y / H,
+    w: rect.w / W,
+    h: rect.h / H,
+    detected: true
+  };
+}
+
+function findSmallSquareMarkers(binMat, expectedRegion) {
+  const search = regionToPx(expectedRegion, REGION_MARKER.searchPad);
+  const roi = binMat.roi(new cv.Rect(search.x, search.y, search.w, search.h));
+  const work = roi.clone();
+  const contours = new cv.MatVector();
+  const hierarchy = new cv.Mat();
+  const markers = [];
+
+  cv.findContours(work, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+  for (let i = 0; i < contours.size(); i++) {
+    const cnt = contours.get(i);
+    const rect = cv.boundingRect(cnt);
+    const area = cv.contourArea(cnt);
+    const ratio = rect.width / Math.max(1, rect.height);
+    const sizeOk =
+      rect.width >= REGION_MARKER.minSize &&
+      rect.height >= REGION_MARKER.minSize &&
+      rect.width <= REGION_MARKER.maxSize &&
+      rect.height <= REGION_MARKER.maxSize;
+    const squareOk = ratio >= 0.65 && ratio <= 1.55;
+
+    if (sizeOk && squareOk && area >= 6) {
+      const gx = search.x + rect.x;
+      const gy = search.y + rect.y;
+      const fill = sampleFillRatio(binMat, gx, gy, rect.width, rect.height);
+      if (fill > 0.55) {
+        markers.push({
+          cx: gx + rect.width / 2,
+          cy: gy + rect.height / 2,
+          size: (rect.width + rect.height) / 2,
+          rect: { x: gx, y: gy, w: rect.width, h: rect.height }
+        });
+      }
+    }
+    cnt.delete();
+  }
+
+  roi.delete();
+  work.delete();
+  contours.delete();
+  hierarchy.delete();
+  return markers;
+}
+
+function pickCornerMarkers(markers, fallback) {
+  if (markers.length < 4) return null;
+
+  const base = regionToPx(fallback, 0);
+  const targets = {
+    tl: { x: base.x, y: base.y },
+    tr: { x: base.x + base.w, y: base.y },
+    bl: { x: base.x, y: base.y + base.h },
+    br: { x: base.x + base.w, y: base.y + base.h }
+  };
+  const picked = {};
+  const used = new Set();
+
+  for (const [corner, target] of Object.entries(targets)) {
+    const ranked = markers
+      .map((marker, idx) => ({ marker, idx, dist: Math.hypot(marker.cx - target.x, marker.cy - target.y) }))
+      .filter(item => !used.has(item.idx))
+      .sort((a, b) => a.dist - b.dist);
+    if (!ranked.length || ranked[0].dist > REGION_MARKER.searchPad * 1.8) return null;
+    picked[corner] = ranked[0].marker;
+    used.add(ranked[0].idx);
+  }
+
+  return picked;
+}
+
+function detectRegionFromMarkers(binMat, fallback) {
+  const markers = findSmallSquareMarkers(binMat, fallback);
+  const corners = pickCornerMarkers(markers, fallback);
+  if (!corners) return { ...fallback, detected: false };
+
+  const left = (corners.tl.cx + corners.bl.cx) / 2 + REGION_MARKER.innerGap;
+  const right = (corners.tr.cx + corners.br.cx) / 2 - REGION_MARKER.innerGap;
+  const top = (corners.tl.cy + corners.tr.cy) / 2 + REGION_MARKER.innerGap;
+  const bottom = (corners.bl.cy + corners.br.cy) / 2 - REGION_MARKER.innerGap;
+  const rect = {
+    x: Math.max(0, Math.round(left)),
+    y: Math.max(0, Math.round(top)),
+    w: Math.round(right - left),
+    h: Math.round(bottom - top)
+  };
+  const expected = regionToPx(fallback, 0);
+  const valid =
+    rect.w > expected.w * 0.6 &&
+    rect.h > expected.h * 0.6 &&
+    rect.w < expected.w * 1.4 &&
+    rect.h < expected.h * 1.4;
+
+  return valid ? normalizeRegionRect(rect, fallback) : { ...fallback, detected: false };
+}
+
+function detectOmrRegions(binMat, numQ) {
+  return {
+    SBD: detectRegionFromMarkers(binMat, REGION.SBD),
+    CODE: detectRegionFromMarkers(binMat, REGION.CODE),
+    ANSWERS: getAnswerRegions(numQ).map(region => detectRegionFromMarkers(binMat, region))
+  };
+}
+
 function readBubbleNumber(binMat, region, numCols) {
   const { x, y, w, h, cols, rows } = region;
   const X0 = Math.round(x * W), Y0 = Math.round(y * H);
   const RW  = Math.round(w * W), RH  = Math.round(h * H);
-  const cellW = RW / cols;
+  const labelW = Math.round(RW * 0.18);
+  const bubbleX0 = X0 + labelW;
+  const bubbleW = RW - labelW;
+  const cellW = bubbleW / cols;
   const cellH = RH / rows;
 
-  // Thử đọc timing marks bên trái để lấy Y chính xác từng hàng
-  const tmYs = getTimingYs(binMat, Y0, Y0 + RH, rows, 'left');
+  // Không dùng timing marks; mẫu phiếu mới chỉ có 4 ô neo góc.
+  const tmYs = null;
 
   let result = '';
   for (let c = 0; c < cols; c++) {
     let maxDark = -1, picked = -1;
     for (let r = 0; r < rows; r++) {
-      const cx0 = X0 + Math.round(c * cellW);
+      const cx0 = bubbleX0 + Math.round(c * cellW + cellW * 0.1);
       // Dùng timing mark Y nếu có, ngược lại dùng tọa độ % như cũ
       const rowY = tmYs
         ? tmYs[r] - Math.round(cellH * 0.4)
         : Y0 + Math.round(r * cellH);
-      const dark = sampleDark(binMat, cx0, rowY,
+      const dark = sampleFillRatio(binMat, cx0, rowY,
         Math.round(cellW * 0.8), Math.round(cellH * 0.8));
       if (dark > maxDark) { maxDark = dark; picked = r; }
     }
-    if (maxDark > 0.07) result += String(picked);
+    if (maxDark > 0.06) result += String(picked);
     else result += '?';
   }
   return result;
@@ -553,30 +850,24 @@ function readBubbleNumber(binMat, region, numCols) {
 // ════════════════════════════════════════════════════════════════
 //  ĐỌC CÂU TRẢ LỜI — có timing marks hỗ trợ
 // ════════════════════════════════════════════════════════════════
-function readAnswerBubbles(binMat, numQ) {
+function readAnswerBubbles(binMat, numQ, answerRegions = getAnswerRegions(numQ)) {
   const answers = {};
   const flags   = [];
-  const half    = Math.ceil(numQ / 2);
 
-  const panels = [
-    { region: REGION.ANS_LEFT,  qStart: 1,        qEnd: half,  tmSide: 'left'  },
-    { region: REGION.ANS_RIGHT, qStart: half + 1, qEnd: numQ,  tmSide: 'right' }
-  ];
-
-  for (const panel of panels) {
-    const { x, y, w, h } = panel.region;
+  for (const panel of answerRegions) {
+    const { x, y, w, h } = panel;
     const X0  = Math.round(x * W), Y0  = Math.round(y * H);
     const PW  = Math.round(w * W), PH  = Math.round(h * H);
-    const nQ  = panel.qEnd - panel.qStart + 1;
+    const nQ  = panel.to - panel.from + 1;
     const cellH = PH / nQ;
     const ansX0 = X0 + Math.round(PW * 0.28);
     const ansW  = Math.round(PW * 0.72);
 
-    // Thử đọc timing marks để lấy Y chính xác từng câu
-    const tmYs = getTimingYs(binMat, Y0, Y0 + PH, nQ, panel.tmSide);
+    // Không dùng timing marks; đọc theo lưới cố định của REGION.
+    const tmYs = null;
 
     for (let r = 0; r < nQ; r++) {
-      const q = panel.qStart + r;
+      const q = panel.from + r;
 
       // Y tâm của hàng: dùng timing mark nếu có
       let rowCenterY;
@@ -593,24 +884,43 @@ function readAnswerBubbles(binMat, numQ) {
       for (let col = 0; col < 4; col++) {
         const cx0 = ansX0 + Math.round(col * cellW + cellW * 0.1);
         const cwd = Math.round(cellW * 0.8);
-        darks.push(sampleDark(binMat, cx0, cy0, cwd, cHgt));
+        darks.push(sampleFillRatio(binMat, cx0, cy0, cwd, cHgt));
       }
 
-      const avg    = darks.reduce((s,v) => s+v, 0) / 4;
-      const filled = darks.map((d,i) => ({ i, d, ok: d > 0.08 && d > avg * 1.5 }));
-      const chosen = filled.filter(f => f.ok);
+      // Local threshold: so sánh với baseline của hàng này
+      // baseline = trung vị của 4 options (giả định có 1-2 ô tô)
+      const sortedDarks = [...darks].sort((a,b) => a - b);
+      const median = sortedDarks[1]; // trung vị
+      const threshold = Math.max(0.07, median * 1.8, 0.10);
 
-      if (chosen.length === 0) {
+      const filled = darks.map((d,i) => ({
+        i, d,
+        ok: d >= threshold,
+        ratio: d // fill ratio đã chuẩn hóa
+      })).filter(b => b.ok);
+
+      if (filled.length === 0) {
         answers[q] = '?';
         flags.push({ type:'warn', msg:`Câu ${q}: bỏ trống` });
-      } else if (chosen.length > 1) {
-        const best = chosen.sort((a,b) => b.d - a.d)[0];
-        answers[q] = OPTS[best.i];
-        flags.push({ type:'danger', msg:`Câu ${q}: tô ${chosen.length} ô (chọn đậm nhất: ${OPTS[best.i]})` });
+      } else if (filled.length > 1) {
+        // Multi-select: ưu tiên ô có fill ratio cao nhất
+        const best = filled.sort((a,b) => b.d - a.d)[0];
+        const bestRatio = best.d;
+        // Nếu ô tốt nhất vượt trội rõ ràng (>1.5x) → chọn nó
+        const secondBest = filled.length > 1
+          ? filled.sort((a,b) => b.d - a.d)[1].d
+          : 0;
+        if (bestRatio > secondBest * 1.5 && secondBest > 0) {
+          answers[q] = OPTS[best.i];
+          flags.push({ type:'warn', msg:`Câu ${q}: tô nhiều ô (chọn: ${OPTS[best.i]}, đen ${(bestRatio*100).toFixed(0)}%)` });
+        } else {
+          answers[q] = OPTS[best.i];
+          flags.push({ type:'danger', msg:`Câu ${q}: tô ${filled.length} ô (chọn: ${OPTS[best.i]})` });
+        }
       } else {
-        answers[q] = OPTS[chosen[0].i];
-        if (chosen[0].d < 0.12) {
-          flags.push({ type:'warn', msg:`Câu ${q}: tô mờ (${(chosen[0].d*100).toFixed(0)}% độ đen)` });
+        answers[q] = OPTS[filled[0].i];
+        if (filled[0].d < 0.12) {
+          flags.push({ type:'warn', msg:`Câu ${q}: tô mờ (${(filled[0].d*100).toFixed(0)}% độ đen)` });
         }
       }
     }
@@ -657,7 +967,9 @@ function renderScanResult(rec, key) {
       if (o === got && got === exp)  cls = 'filled-correct';
       else if (o === got && got !== exp) cls = 'filled-wrong';
       else if (o === exp && got !== exp) cls = 'key-missed';
-      bubblesHtml += `<div class="ab ${cls}">${o}</div>`;
+      bubblesHtml += `<div class="ab ${cls} clickable"
+        onclick="correctAnswer(${rec.id},${i},'${o}')"
+        title="Sửa câu ${i} thành ${o}">${o}</div>`;
     });
     bubblesHtml += '</div></div>';
   }
@@ -687,7 +999,92 @@ function renderScanResult(rec, key) {
         </div>
       </div>
       ${flagsHtml}
-      <p class="card-title" style="margin-top:.75rem">Chi tiết từng câu</p>
+      <p class="card-title" style="margin-top:.75rem">
+        Chi tiết từng câu <small style="font-weight:normal;color:var(--text3)">— click vào ô để sửa</small>
+      </p>
+      ${bubblesHtml}
+      <div class="btn-row" style="margin-top:.75rem">
+        <button class="btn" onclick="goTab('results')">📋 Xem tất cả kết quả</button>
+        <button class="btn accent" onclick="document.getElementById('scanResult').innerHTML=''">✨ Chấm tiếp</button>
+      </div>
+    </div>`;
+}
+
+/**
+ * Sửa đáp án trực tiếp trên UI — cập nhật kết quả và tính lại điểm
+ */
+function correctAnswer(recId, qNum, newOpt) {
+  const rec = results.find(r => r.id === recId);
+  if (!rec) return;
+  const key = keys.find(k => k.id === rec.keyId);
+  if (!key) return;
+
+  rec.answers[qNum] = newOpt;
+
+  let correct = 0, skipped = 0;
+  for (let i = 1; i <= rec.numQ; i++) {
+    const got = rec.answers[i] || '?';
+    const exp = key.a[i];
+    if (got === '?') skipped++;
+    else if (got === exp) correct++;
+  }
+  rec.correct = correct;
+  rec.skipped = skipped;
+  rec.score = +(correct / rec.numQ * rec.scale).toFixed(1);
+
+  saveLocal();
+  renderCorrectedResult(rec, key);
+}
+
+/**
+ * Render lại kết quả sau khi sửa
+ */
+function renderCorrectedResult(rec, key) {
+  const pct = rec.score / rec.scale;
+  const scoreClass = pct >= 0.8 ? '' : pct >= 0.5 ? 'warn' : 'fail';
+  const wrong = rec.numQ - rec.correct - rec.skipped;
+
+  let bubblesHtml = '<div class="ans-sheet">';
+  for (let i = 1; i <= rec.numQ; i++) {
+    const got = rec.answers[i] || '?';
+    const exp = key.a[i];
+    bubblesHtml += `<div class="as-row">
+      <span class="as-num">${i}.</span>
+      <div class="as-bubbles">`;
+    OPTS.forEach(o => {
+      let cls = '';
+      if (o === got && got === exp)  cls = 'filled-correct';
+      else if (o === got && got !== exp) cls = 'filled-wrong';
+      else if (o === exp && got !== exp) cls = 'key-missed';
+      bubblesHtml += `<div class="ab ${cls} clickable"
+        onclick="correctAnswer(${rec.id},${i},'${o}')"
+        title="Sửa câu ${i} thành ${o}">${o}</div>`;
+    });
+    bubblesHtml += '</div></div>';
+  }
+  bubblesHtml += '</div>';
+
+  document.getElementById('scanResult').innerHTML = `
+    <div class="result-card">
+      <div class="rc-header">
+        <div class="rc-score-box ${scoreClass}">
+          <div class="rc-score-num">${rec.score}</div>
+          <div class="rc-score-den">/ ${rec.scale}</div>
+        </div>
+        <div class="rc-info">
+          <h3>${rec.keyName} · Mã đề ${rec.keyCode}</h3>
+          <div class="rc-meta">
+            SBD nhận dạng: <b>${rec.sbd || '—'}</b><br>
+            Đúng: <span class="text-green"><b>${rec.correct}</b></span> ·
+            Sai: <span class="text-red"><b>${wrong}</b></span> ·
+            Bỏ trống: <span class="text-amber"><b>${rec.skipped}</b></span><br>
+            ${rec.ts} <span style="color:var(--accent);font-size:11px">· Đã chỉnh sửa</span>
+          </div>
+        </div>
+      </div>
+      <p class="card-title" style="margin-top:.75rem">
+        Chi tiết từng câu <small style="font-weight:normal;color:var(--text3)">— click vào ô để sửa</small>
+      </p>
       ${bubblesHtml}
       <div class="btn-row" style="margin-top:.75rem">
         <button class="btn" onclick="goTab('results')">📋 Xem tất cả kết quả</button>
@@ -726,6 +1123,7 @@ function renderResults() {
   document.getElementById('resultTable').innerHTML = `
     <table class="rtable">
       <thead><tr>
+        <th style="width:30px"><input type="checkbox" id="selAllChk" onchange="toggleSelectAll(this.checked)"></th>
         <th>SBD</th><th>Bài kiểm tra</th><th>Mã đề</th>
         <th>Kết quả</th><th>Điểm</th><th>Thời gian</th><th></th>
       </tr></thead>
@@ -733,7 +1131,8 @@ function renderResults() {
         const pct = r.score / r.scale;
         const sc  = pct>=.8?'good':pct>=.5?'mid':'low';
         const wr  = r.numQ - r.correct - r.skipped;
-        return `<tr>
+        return `<tr data-id="${r.id}">
+          <td><input type="checkbox" class="row-chk" onchange="onRowCheckboxChange()"></td>
           <td><b>${r.sbd || '—'}</b></td>
           <td>${r.keyName}</td>
           <td>${r.keyCode}</td>
@@ -745,6 +1144,36 @@ function renderResults() {
         </tr>`;
       }).join('')}</tbody>
     </table>`;
+  onRowCheckboxChange();
+}
+
+function onRowCheckboxChange() {
+  const checked = document.querySelectorAll('.row-chk:checked').length;
+  const total   = document.querySelectorAll('.row-chk').length;
+  const btn     = document.getElementById('delSelectedBtn');
+  if (btn) {
+    btn.style.display = checked > 0 ? '' : 'none';
+    document.getElementById('selectedCount').textContent = checked;
+  }
+  const selAll = document.getElementById('selAllChk');
+  if (selAll) {
+    selAll.checked = checked > 0 && checked === total;
+    selAll.indeterminate = checked > 0 && checked < total;
+  }
+}
+
+function toggleSelectAll(checked) {
+  document.querySelectorAll('.row-chk').forEach(c => c.checked = checked);
+  onRowCheckboxChange();
+}
+
+function deleteSelectedResults() {
+  const ids = [...document.querySelectorAll('.row-chk:checked')]
+    .map(c => +c.closest('tr').dataset.id);
+  if (!ids.length) return;
+  if (!confirm(`Xóa ${ids.length} kết quả đã chọn?`)) return;
+  results = results.filter(r => !ids.includes(r.id));
+  saveLocal(); renderResults();
 }
 
 function deleteResult(id) {
@@ -888,6 +1317,22 @@ function sampleDark(mat, x0, y0, w, h) {
   return mn[0] / 255;
 }
 
+/**
+ * Đếm tỷ lệ pixel đen trong vùng ROI (fill ratio)
+ * Chính xác hơn grayscale mean vì dùng countNonZero trên ảnh nhị phân
+ */
+function sampleFillRatio(binMat, x0, y0, w, h) {
+  const x1 = Math.min(binMat.cols-1, Math.max(x0, x0+w));
+  const y1 = Math.min(binMat.rows-1, Math.max(y0, y0+h));
+  const rw = x1 - x0, rh = y1 - y0;
+  if (rw <= 0 || rh <= 0) return 0;
+  const roi = binMat.roi(new cv.Rect(x0, y0, rw, rh));
+  const total = rw * rh;
+  const black = cv.countNonZero(roi);
+  roi.delete();
+  return black / total;
+}
+
 function loadImage(src) {
   return new Promise((res, rej) => {
     const img = new Image();
@@ -925,28 +1370,25 @@ function addPreview(container, canvas, label) {
 
 function drawAnchorDebug(mat, anchors) {
   const debug = mat.clone();
-  Object.values(anchors).forEach(a => {
+  Object.values(anchors).filter(a => a && typeof a.cx === 'number').forEach(a => {
     cv.circle(debug, new cv.Point(a.cx, a.cy), 12, [0,255,0,255], 3);
   });
   return matToCanvas(debug);
 }
 
-function drawAnswerDebug(mat, numQ) {
+function drawAnswerDebug(mat, numQ, answerRegions = getAnswerRegions(numQ)) {
   const debug = mat.clone();
-  const half  = Math.ceil(numQ / 2);
-  const panels = [
-    { region: REGION.ANS_LEFT,  nQ: half },
-    { region: REGION.ANS_RIGHT, nQ: numQ - half }
-  ];
-  panels.forEach(p => {
-    const { x, y, w, h } = p.region;
+  answerRegions.forEach(p => {
+    const { x, y, w, h } = p;
+    const nQ = p.to - p.from + 1;
     const X0 = Math.round(x*W), Y0 = Math.round(y*H);
     const PW = Math.round(w*W), PH = Math.round(h*H);
-    cv.rectangle(debug, new cv.Point(X0,Y0), new cv.Point(X0+PW,Y0+PH), [0,200,0,255], 2);
-    const cellH = PH / p.nQ;
+    const color = p.detected ? [0,200,0,255] : [240,160,0,255];
+    cv.rectangle(debug, new cv.Point(X0,Y0), new cv.Point(X0+PW,Y0+PH), color, 2);
+    const cellH = PH / nQ;
     const ansX0 = X0 + Math.round(PW*0.28);
     const ansW  = Math.round(PW*0.72);
-    for (let r = 0; r < p.nQ; r++) {
+    for (let r = 0; r < nQ; r++) {
       const cy0 = Y0 + Math.round(r*cellH+cellH*0.08);
       const cH  = Math.round(cellH*0.84);
       for (let col = 0; col < 4; col++) {
